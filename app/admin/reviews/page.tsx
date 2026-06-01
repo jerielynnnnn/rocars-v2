@@ -93,7 +93,15 @@ export default function AdminReviewsPage() {
         .order('created_at', { ascending: false })
 
       if (error) throw error
-      setReviews(data || [])
+      
+      // Transform the data to handle potential array responses
+      const transformedData = (data || []).map((item: any) => ({
+        ...item,
+        user: Array.isArray(item.user) ? item.user[0] : item.user,
+        product: Array.isArray(item.product) ? item.product[0] : item.product,
+      }))
+      
+      setReviews(transformedData)
     } catch (error) {
       console.error('Error fetching reviews:', error)
     } finally {
@@ -103,41 +111,154 @@ export default function AdminReviewsPage() {
 
   const fetchOrderRatings = async () => {
     try {
+      console.log('Fetching order ratings...')
+      
+      // Fetch order ratings without joins first to avoid TypeScript issues
       const { data, error } = await supabase
         .from('order_ratings')
-        .select(`
-          *,
-          user:profiles!order_ratings_user_id_fkey (
-            username,
-            first_name,
-            last_name
-          ),
-          order:orders (
-            total_amount
-          )
-        `)
+        .select('*')
         .order('created_at', { ascending: false })
 
-      if (error) throw error
-      setOrderRatings(data || [])
-    } catch (error) {
-      console.error('Error fetching order ratings:', error)
+      if (error) {
+        console.error('Error fetching order ratings:', error)
+        setOrderRatings([])
+        return
+      }
+
+      if (!data || data.length === 0) {
+        console.log('No order ratings found')
+        setOrderRatings([])
+        return
+      }
+
+      // Get unique user IDs to fetch profiles
+      const userIds = [...new Set(data.map(rating => rating.user_id).filter(Boolean))]
+      
+      // Fetch profiles for these users
+      let profilesMap = new Map()
+      if (userIds.length > 0) {
+        const { data: profiles, error: profilesError } = await supabase
+          .from('profiles')
+          .select('id, username, first_name, last_name')
+          .in('id', userIds)
+
+        if (!profilesError && profiles) {
+          profilesMap = new Map(profiles.map(profile => [profile.id, profile]))
+        }
+      }
+
+      // Transform the data to include user profiles
+      const transformedData: OrderRating[] = data.map(rating => ({
+        id: rating.id,
+        order_id: rating.order_id,
+        user_id: rating.user_id,
+        rating: rating.rating,
+        comment: rating.comment,
+        created_at: rating.created_at,
+        user: profilesMap.get(rating.user_id),
+      }))
+
+      console.log('Order ratings fetched successfully:', transformedData.length)
+      setOrderRatings(transformedData)
+    } catch (error: any) {
+      console.error('Unexpected error fetching order ratings:', error?.message || error)
+      setOrderRatings([])
     }
   }
+
 
   const handleDeleteReview = async (id: number) => {
-    if (!confirm('Delete this review?')) return
+  // Determine which table to delete from based on active tab
+  const tableName = activeTab === 'product' ? 'reviews' : 'order_ratings'
+  const itemName = activeTab === 'product' ? 'review' : 'rating'
+  
+  console.log('=== DELETE DEBUG ===')
+  console.log('Table:', tableName)
+  console.log('ID to delete:', id)
+  console.log('Active tab:', activeTab)
+  
+  if (!confirm(`Delete this ${itemName}? This action cannot be undone.`)) return
+  
+  try {
+    // First, check if the record exists and get its data
+    const { data: existingData, error: fetchError } = await supabase
+      .from(tableName)
+      .select('*')
+      .eq('id', id)
+      .single()
     
-    const { error } = await supabase
-      .from('reviews')
+    console.log('Existing record check:', { existingData, fetchError })
+    
+    if (fetchError) {
+      console.error('Record not found:', fetchError)
+      alert(`Record with ID ${id} not found in ${tableName} table`)
+      return
+    }
+    
+    console.log('Record exists, attempting delete...')
+    
+    // Perform the delete
+    const { data: deletedData, error: deleteError, status, statusText } = await supabase
+      .from(tableName)
       .delete()
       .eq('id', id)
-
-    if (!error) {
+      .select()
+    
+    console.log('Delete response:', { 
+      deletedData, 
+      deleteError, 
+      status, 
+      statusText,
+      errorCode: deleteError?.code,
+      errorMessage: deleteError?.message,
+      errorDetails: deleteError?.details,
+      errorHint: deleteError?.hint
+    })
+    
+    if (deleteError) {
+      console.error(`Error deleting ${itemName}:`, deleteError)
+      
+      // Check for specific error types
+      if (deleteError.code === '42501') {
+        alert(`Permission denied: You don't have DELETE permission on ${tableName} table. Contact an administrator.`)
+      } else if (deleteError.code === '23503') {
+        alert(`Cannot delete: This ${itemName} is referenced by other records.`)
+      } else {
+        alert(`Failed to delete ${itemName}: ${deleteError.message}`)
+      }
+      return
+    }
+    
+    if (!deletedData || deletedData.length === 0) {
+      console.warn('Delete seemed successful but no data was returned')
+      alert(`${itemName} may not have been deleted. Please refresh and check.`)
+      return
+    }
+    
+    console.log(`Successfully deleted ${itemName}:`, deletedData)
+    
+    // Update the correct state based on active tab
+    if (activeTab === 'product') {
       setReviews(prev => prev.filter(r => r.id !== id))
       setSelectedReview(null)
+    } else {
+      setOrderRatings(prev => prev.filter(r => r.id !== id))
     }
+    
+    alert(`${itemName} deleted successfully!`)
+    
+    // Optional: Refresh to verify
+    if (activeTab === 'product') {
+      await fetchReviews()
+    } else {
+      await fetchOrderRatings()
+    }
+    
+  } catch (error: any) {
+    console.error(`Unexpected error deleting ${itemName}:`, error)
+    alert(`Failed to delete ${itemName}: ${error?.message || 'Unknown error'}`)
   }
+}
 
   const filteredReviews = useMemo(() => {
     return reviews.filter(review => {
@@ -186,7 +307,7 @@ export default function AdminReviewsPage() {
         <Star
           key={star}
           className={`w-3.5 h-3.5 ${
-            star <= rating ? 'fill-yellow-400 text-yellow-400' : 'text-gray-700'
+            star <= rating ? 'fill-yellow-400 text-yellow-400' : 'text-gray-300'
           }`}
         />
       ))}
@@ -194,9 +315,9 @@ export default function AdminReviewsPage() {
   )
 
   const getRatingColor = (rating: number) => {
-    if (rating >= 4) return 'text-green-500'
-    if (rating >= 3) return 'text-yellow-500'
-    return 'text-red-500'
+    if (rating >= 4) return 'text-green-600'
+    if (rating >= 3) return 'text-yellow-600'
+    return 'text-red-600'
   }
 
   if (loading) {
@@ -401,7 +522,7 @@ export default function AdminReviewsPage() {
                     <td className="px-6 py-4">
                       {activeTab === 'product' ? (
                         <p className="text-sm font-medium text-gray-900">
-                          {(item as Review).product?.name}
+                          {(item as Review).product?.name || 'Unknown Product'}
                         </p>
                       ) : (
                         <p className="text-sm text-gray-900">Order #{(item as OrderRating).order_id}</p>
@@ -485,7 +606,7 @@ export default function AdminReviewsPage() {
             <div className="p-6 border-b border-gray-200 flex items-center justify-between">
               <div>
                 <h2 className="text-xl font-bold text-gray-900">Review Details</h2>
-                <p className="text-sm text-gray-500 mt-1">Product: {selectedReview.product?.name}</p>
+                <p className="text-sm text-gray-500 mt-1">Product: {selectedReview.product?.name || 'Unknown'}</p>
               </div>
               <button
                 onClick={() => setSelectedReview(null)}

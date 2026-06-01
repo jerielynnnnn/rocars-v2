@@ -17,8 +17,6 @@ import {
   ChevronLeft,
   ChevronRight,
   AlertCircle,
-  Send,
-  Ban,
   DollarSign
 } from 'lucide-react'
 
@@ -70,7 +68,6 @@ export default function AdminPaymentsPage() {
   useEffect(() => {
     fetchPayments()
     
-    // Set up real-time subscription for payment updates
     const subscription = supabase
       .channel('payments-changes')
       .on(
@@ -122,7 +119,8 @@ export default function AdminPaymentsPage() {
 
       let profilesMap = new Map()
       if (userIds.length > 0) {
-        const { data: profilesData, error: profilesError } = await supabase          .from('profiles')
+        const { data: profilesData, error: profilesError } = await supabase
+          .from('profiles')
           .select('id, first_name, last_name, email')
           .in('id', userIds)
 
@@ -150,26 +148,42 @@ export default function AdminPaymentsPage() {
     }
   }
 
-  const updatePaymentStatus = async (paymentId: number, newStatus: PaymentStatus, orderId?: number) => {
+  // ============================================
+  // COMPLETELY REWRITTEN updatePaymentStatus with detailed error logging
+  // ============================================
+ const updatePaymentStatus = async (paymentId: number, newStatus: PaymentStatus, orderId?: number) => {
   setUpdatingPaymentId(paymentId)
   setUpdatingStatus(true)
 
   try {
-    // Update payment status
+    console.log('=== UPDATE PAYMENT STATUS START ===')
+    console.log('Payment ID:', paymentId)
+    console.log('New Status:', newStatus)
+    console.log('Order ID:', orderId)
+
+    // Step 1: Update payment status
     const updateData: any = { payment_status: newStatus }
     if (newStatus === 'paid') {
       updateData.paid_at = new Date().toISOString()
     }
 
-    const { error: paymentError } = await supabase
+    const { data: updatedPayment, error: paymentError } = await supabase
       .from('payments')
       .update(updateData)
       .eq('id', paymentId)
+      .select()
 
-    if (paymentError) throw paymentError
+    if (paymentError) {
+      console.error('Payment update error:', paymentError)
+      throw new Error(`Payment update failed: ${paymentError.message}`)
+    }
 
-    // If payment is marked as paid, also update order status
+    console.log('Payment updated successfully')
+
+    // Step 2: If payment is marked as paid, update order
     if (newStatus === 'paid' && orderId) {
+      console.log('Updating order status for order ID:', orderId)
+      
       const { error: orderError } = await supabase
         .from('orders')
         .update({ 
@@ -178,81 +192,113 @@ export default function AdminPaymentsPage() {
         })
         .eq('id', orderId)
 
-      if (orderError) throw orderError
-
-      // Add to order status history
-      const { error: historyError } = await supabase
-        .from('order_status_history')
-        .insert({
-          order_id: orderId,
-          status: 'processing',
-          notes: 'Payment confirmed, order is now processing'
-        })
-
-      if (historyError) {
-        console.error('Error creating status history:', historyError)
-        // Don't throw - continue with notification
+      if (orderError) {
+        console.error('Order update error:', orderError)
+        throw new Error(`Order update failed: ${orderError.message}`)
       }
 
-      // Get user_id for notification
-      const { data: orderData, error: orderFetchError } = await supabase
-        .from('orders')
-        .select('user_id')
-        .eq('id', orderId)
-        .single()
+      console.log('Order updated successfully')
 
-      if (orderFetchError) {
-        console.error('Error fetching order for notification:', orderFetchError)
-      } else if (orderData) {
-        // FIXED: Removed 'type' column - not in your schema
-        const { error: notifError } = await supabase
-          .from('notifications')
-          .insert({
+      // Step 3: Add to order status history - MATCHING YOUR SCHEMA EXACTLY
+      console.log('Adding to order_status_history...')
+      
+      // Only include columns that exist in your schema
+      const historyData = {
+        order_id: orderId,
+        status: 'processing',
+        notes: 'Payment confirmed, order is now processing'
+        // created_at is omitted - let database handle it (default now())
+      }
+      
+      console.log('Attempting to insert history data:', historyData)
+      
+      const { data: historyResult, error: historyError } = await supabase
+        .from('order_status_history')
+        .insert(historyData)
+        .select()
+
+      if (historyError) {
+        // Log detailed error information
+        console.error('Status history error details:', {
+          message: historyError.message,
+          code: historyError.code,
+          details: historyError.details,
+          hint: historyError.hint
+        })
+        console.error('Failed to insert history data:', historyData)
+        
+        // Check if it's an RLS issue
+        if (historyError.code === '42501') {
+          console.error('RLS POLICY ERROR: You need to enable INSERT for order_status_history table')
+        }
+        // Don't throw - this is non-critical for payment marking
+      } else {
+        console.log('Status history added successfully:', historyResult)
+      }
+
+      // Step 4: Add notification
+      try {
+        const { data: orderData, error: orderFetchError } = await supabase
+          .from('orders')
+          .select('user_id')
+          .eq('id', orderId)
+          .single()
+
+        if (orderFetchError) {
+          console.error('Order fetch error:', orderFetchError)
+        } else if (orderData) {
+          const notificationData = {
             user_id: orderData.user_id,
             title: 'Payment Confirmed ✅',
             message: `Your payment for order #${orderId} has been confirmed. Your order is now being processed.`,
             is_read: false
-            // REMOVED: type: 'payment' - this column doesn't exist in your table
-          })
+          }
+          
+          const { error: notifError } = await supabase
+            .from('notifications')
+            .insert(notificationData)
 
-        if (notifError) {
-          console.error('Error creating notification:', notifError)
+          if (notifError) {
+            console.error('Notification error:', notifError)
+          } else {
+            console.log('Notification created successfully')
+          }
         }
+      } catch (notifErr) {
+        console.error('Notification creation failed:', notifErr)
       }
     }
 
-    // If payment is marked as failed, add notification
+    // Step 5: If payment is marked as failed
     if (newStatus === 'failed' && orderId) {
-      const { data: orderData, error: orderFetchError } = await supabase
-        .from('orders')
-        .select('user_id')
-        .eq('id', orderId)
-        .single()
+      console.log('Processing failed payment...')
+      
+      try {
+        const { data: orderData } = await supabase
+          .from('orders')
+          .select('user_id')
+          .eq('id', orderId)
+          .single()
 
-      if (orderFetchError) {
-        console.error('Error fetching order for notification:', orderFetchError)
-      } else if (orderData) {
-        // FIXED: Removed 'type' column - not in your schema
-        const { error: notifError } = await supabase
-          .from('notifications')
-          .insert({
-            user_id: orderData.user_id,
-            title: 'Payment Failed ❌',
-            message: `Your payment for order #${orderId} has failed. Please try again or contact support.`,
-            is_read: false
-            // REMOVED: type: 'payment' - this column doesn't exist in your table
-          })
-
-        if (notifError) {
-          console.error('Error creating notification:', notifError)
+        if (orderData) {
+          await supabase
+            .from('notifications')
+            .insert({
+              user_id: orderData.user_id,
+              title: 'Payment Failed ❌',
+              message: `Your payment for order #${orderId} has failed. Please try again or contact support.`,
+              is_read: false
+            })
         }
+      } catch (notifErr) {
+        console.error('Failed notification error:', notifErr)
       }
     }
 
-    // Refresh data
+    // Step 6: Refresh data
     await fetchPayments()
     
-    // Update selected payment if modal is open
+    // Step 7: Update selected payment if modal is open
     if (selectedPayment && selectedPayment.id === paymentId) {
       setSelectedPayment({
         ...selectedPayment,
@@ -261,9 +307,13 @@ export default function AdminPaymentsPage() {
       })
     }
 
-  } catch (error) {
-    console.error('Error updating payment:', error)
-    alert('Failed to update payment status')
+    console.log('=== UPDATE PAYMENT STATUS COMPLETED SUCCESSFULLY ===')
+    alert(`Payment marked as ${newStatus.toUpperCase()} successfully!`)
+
+  } catch (error: any) {
+    console.error('=== UPDATE PAYMENT STATUS FAILED ===')
+    console.error('Error message:', error?.message)
+    alert(`Failed to update payment status: ${error?.message || 'Unknown error'}`)
   } finally {
     setUpdatingPaymentId(null)
     setUpdatingStatus(false)
