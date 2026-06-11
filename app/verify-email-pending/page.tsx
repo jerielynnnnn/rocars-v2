@@ -53,7 +53,7 @@ export default function VerifyEmailPendingPage() {
         type: 'signup',
         email: email,
         options: {
-          emailRedirectTo: `${window.location.origin}/auth/callback`,
+          emailRedirectTo: `${window.location.origin}/auth/callback?redirect=${encodeURIComponent('/login?verified=true')}`,
         },
       })
       

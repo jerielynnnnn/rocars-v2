@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from 'react';
 import { supabase } from '@/lib/supabase';
+import { logAdminActivity } from '@/lib/admin-activity';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import {
@@ -173,22 +174,39 @@ export default function AdminProductsPage() {
     };
   };
 
+  const getAccessToken = async () => {
+    const { data: { session } } = await supabase.auth.getSession();
+    if (!session?.access_token) {
+      throw new Error('Admin session expired. Please login again.');
+    }
+    return session.access_token;
+  };
+
   const handleDeleteProduct = async () => {
     if (!selectedProduct) return;
     
     setDeleting(true);
     try {
-      await supabase
-        .from('product_images')
-        .delete()
-        .eq('product_id', selectedProduct.id);
+      const accessToken = await getAccessToken();
+      const response = await fetch(`/api/admin/products/${selectedProduct.id}`, {
+        method: 'DELETE',
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+        },
+      });
 
-      const { error } = await supabase
-        .from('products')
-        .delete()
-        .eq('id', selectedProduct.id);
+      const result = await response.json();
 
-      if (error) throw error;
+      if (!response.ok) {
+        throw new Error(result.error || 'Failed to delete product');
+      }
+
+      await logAdminActivity({
+        action: 'DELETE_PRODUCT',
+        target_type: 'product',
+        target_id: selectedProduct.id,
+        details: { name: selectedProduct.name, sku: selectedProduct.sku },
+      });
 
       setShowDeleteModal(false);
       setSelectedProduct(null);
@@ -202,12 +220,28 @@ export default function AdminProductsPage() {
 
   const handleToggleActive = async (productId: number, currentStatus: boolean) => {
     try {
-      const { error } = await supabase
-        .from('products')
-        .update({ is_active: !currentStatus })
-        .eq('id', productId);
+      const accessToken = await getAccessToken();
+      const response = await fetch(`/api/admin/products/${productId}`, {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${accessToken}`,
+        },
+        body: JSON.stringify({ product: { is_active: !currentStatus } }),
+      });
 
-      if (error) throw error;
+      const result = await response.json();
+
+      if (!response.ok) {
+        throw new Error(result.error || 'Failed to update product status');
+      }
+
+      await logAdminActivity({
+        action: 'UPDATE_PRODUCT_STATUS',
+        target_type: 'product',
+        target_id: productId,
+        details: { is_active: !currentStatus },
+      });
       
       setProducts(products.map(p => 
         p.id === productId ? { ...p, is_active: !currentStatus } : p
@@ -400,7 +434,7 @@ export default function AdminProductsPage() {
                       <div className="flex items-center gap-3">
                         <div className="w-12 h-12 bg-gray-100 rounded-lg overflow-hidden flex-shrink-0">
                           <img
-                            src={product.product_images?.[0]?.image_url || '/placeholder-product.jpg'}
+                            src={product.product_images?.[0]?.image_url || '/placeholder-product.png'}
                             alt={product.name}
                             className="w-full h-full object-cover"
                           />

@@ -4,7 +4,7 @@ import { useState, useEffect } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { supabase } from '@/lib/supabase'
 import { 
-  User, Home, Lock, Bell, Heart, ShoppingBag, 
+  User, Home, Lock, Heart, ShoppingBag, 
   Settings, LogOut, ChevronRight, Camera, Loader2,
   CheckCircle, AlertCircle
 } from 'lucide-react'
@@ -234,7 +234,6 @@ export default function ProfilePage() {
     { id: 'profile', name: 'Profile Information', icon: User, href: '/profile?tab=profile' },
     { id: 'addresses', name: 'Addresses', icon: Home, href: '/profile/addresses' },
     { id: 'security', name: 'Security', icon: Lock, href: '/profile/security' },
-    { id: 'notifications', name: 'Notifications', icon: Bell, href: '/profile/notifications' },
     { id: 'wishlist', name: 'Wishlist', icon: Heart, href: '/profile/wishlist' },
     { id: 'orders', name: 'Orders', icon: ShoppingBag, href: '/orders' },
   ]

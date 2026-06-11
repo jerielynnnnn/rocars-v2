@@ -2,12 +2,12 @@
 'use client'
 
 import { useEffect, useState } from 'react'
+import Link from 'next/link'
 import { supabase } from '@/lib/supabase'
 import {
   Users,
   Package,
   ShoppingBag,
-  TrendingUp,
   Loader2,
   ArrowUp,
   ArrowDown,
@@ -18,6 +18,10 @@ import {
   Eye,
   Download,
   RefreshCw,
+  AlertTriangle,
+  CreditCard,
+  Truck,
+  Plus,
 } from 'lucide-react'
 
 interface DashboardStats {
@@ -56,6 +60,13 @@ interface RevenueData {
   revenue: number
 }
 
+interface LowStockProduct {
+  id: number
+  name: string
+  stock: number
+  price: number
+}
+
 // Define the order item type with proper relations
 interface OrderItemWithProduct {
   product_id: number
@@ -90,6 +101,7 @@ export default function DashboardPage() {
   const [recentOrders, setRecentOrders] = useState<RecentOrder[]>([])
   const [topProducts, setTopProducts] = useState<TopProduct[]>([])
   const [revenueData, setRevenueData] = useState<RevenueData[]>([])
+  const [lowStockProducts, setLowStockProducts] = useState<LowStockProduct[]>([])
   const [timeRange, setTimeRange] = useState<'week' | 'month' | 'year'>('month')
   const [exporting, setExporting] = useState(false)
 
@@ -100,61 +112,22 @@ export default function DashboardPage() {
       fetchRecentOrders(),
       fetchTopProducts(),
       fetchRevenueData(),
+      fetchLowStockProducts(),
     ])
     setLastUpdated(new Date())
     setRefreshing(false)
   }
 
-  // Fetch revenue from payments table (where payment_status = 'paid')
-  const fetchTotalRevenueFromPayments = async (startDate?: Date, endDate?: Date) => {
-    try {
-      let query = supabase
-        .from('payments')
-        .select('amount')
-        .eq('payment_status', 'paid')
-
-      if (startDate) {
-        query = query.gte('created_at', startDate.toISOString())
-      }
-      if (endDate) {
-        query = query.lt('created_at', endDate.toISOString())
-      }
-
-      const { data, error } = await query
-
-      if (error) throw error
-
-      const total = data?.reduce((sum, p) => sum + (p.amount || 0), 0) || 0
-      return total
-    } catch (error) {
-      console.error('Error fetching revenue from payments:', error)
-      return 0
-    }
-  }
-
   useEffect(() => {
     fetchAllData()
 
-    // Set up real-time subscriptions for all relevant tables
+    // Set up real-time subscriptions
     const ordersChannel = supabase
       .channel('dashboard-orders')
       .on(
         'postgres_changes',
         { event: '*', schema: 'public', table: 'orders' },
         () => {
-          console.log('Orders changed, refreshing dashboard...')
-          fetchAllData()
-        }
-      )
-      .subscribe()
-
-    const paymentsChannel = supabase
-      .channel('dashboard-payments')
-      .on(
-        'postgres_changes',
-        { event: '*', schema: 'public', table: 'payments' },
-        () => {
-          console.log('Payments changed, refreshing dashboard...')
           fetchAllData()
         }
       )
@@ -168,6 +141,7 @@ export default function DashboardPage() {
         () => {
           fetchDashboardData()
           fetchTopProducts()
+          fetchLowStockProducts()
         }
       )
       .subscribe()
@@ -192,7 +166,6 @@ export default function DashboardPage() {
 
     return () => {
       ordersChannel.unsubscribe()
-      paymentsChannel.unsubscribe()
       productsChannel.unsubscribe()
       profilesChannel.unsubscribe()
       refundsChannel.unsubscribe()
@@ -234,11 +207,23 @@ export default function DashboardPage() {
         .gte('created_at', yesterday.toISOString())
         .lt('created_at', today.toISOString())
 
-      // Fetch total revenue from PAYMENTS table (paid payments)
-      const totalRevenue = await fetchTotalRevenueFromPayments()
+      // Fetch total revenue (paid orders)
+      const { data: revenueData } = await supabase
+        .from('orders')
+        .select('total_amount')
+        .eq('payment_status', 'paid')
 
-      // Fetch revenue yesterday from PAYMENTS table
-      const revenueYesterday = await fetchTotalRevenueFromPayments(yesterday, today)
+      const totalRevenue = revenueData?.reduce((sum, order) => sum + (order.total_amount || 0), 0) || 0
+
+      // Fetch revenue yesterday
+      const { data: revenueYesterdayData } = await supabase
+        .from('orders')
+        .select('total_amount')
+        .eq('payment_status', 'paid')
+        .gte('created_at', yesterday.toISOString())
+        .lt('created_at', today.toISOString())
+
+      const revenueYesterday = revenueYesterdayData?.reduce((sum, order) => sum + (order.total_amount || 0), 0) || 0
 
       // Fetch order status counts
       const { count: pendingOrders } = await supabase
@@ -388,7 +373,7 @@ export default function DashboardPage() {
 
   const fetchRevenueData = async () => {
     try {
-      let startDate = new Date()
+      const startDate = new Date()
       
       switch (timeRange) {
         case 'week':
@@ -402,10 +387,9 @@ export default function DashboardPage() {
           break
       }
 
-      // Fetch revenue from PAYMENTS table (paid payments)
       const { data, error } = await supabase
-        .from('payments')
-        .select('amount, created_at')
+        .from('orders')
+        .select('total_amount, created_at')
         .eq('payment_status', 'paid')
         .gte('created_at', startDate.toISOString())
         .order('created_at', { ascending: true })
@@ -415,10 +399,10 @@ export default function DashboardPage() {
       // Group by date
       const revenueByDate = new Map<string, number>()
       
-      for (const payment of data || []) {
-        const date = new Date(payment.created_at).toISOString().split('T')[0]
+      for (const order of data || []) {
+        const date = new Date(order.created_at).toISOString().split('T')[0]
         const currentRevenue = revenueByDate.get(date) || 0
-        revenueByDate.set(date, currentRevenue + (payment.amount || 0))
+        revenueByDate.set(date, currentRevenue + (order.total_amount || 0))
       }
 
       const revenueArray = Array.from(revenueByDate.entries()).map(([date, revenue]) => ({
@@ -432,19 +416,39 @@ export default function DashboardPage() {
     }
   }
 
+  const fetchLowStockProducts = async () => {
+    try {
+      const { data, error } = await supabase
+        .from('products')
+        .select('id, name, stock, price')
+        .eq('is_active', true)
+        .lte('stock', 10)
+        .order('stock', { ascending: true })
+        .limit(6)
+
+      if (error) throw error
+
+      setLowStockProducts(data || [])
+    } catch (error) {
+      console.error('Error fetching low stock products:', error)
+      setLowStockProducts([])
+    }
+  }
+
   const exportDashboardData = async () => {
     setExporting(true)
     try {
-      // Fetch all payments for export
-      const { data: payments } = await supabase
-        .from('payments')
-        .select('*')
-        .order('created_at', { ascending: false })
-
-      // Fetch all orders
+      // Fetch all orders for export
       const { data: orders } = await supabase
         .from('orders')
-        .select('*')
+        .select(`
+          id,
+          total_amount,
+          order_status,
+          payment_status,
+          created_at,
+          user_id
+        `)
         .order('created_at', { ascending: false })
 
       // Fetch all products
@@ -469,37 +473,52 @@ export default function DashboardPage() {
         recentOrders: recentOrders,
         topProducts: topProducts,
         revenueData: revenueData,
-        payments: payments,
-        orders: orders,
       }
 
-      // Create CSV for payments
-      const paymentsCSV = [
-        ['Payment ID', 'Order ID', 'Provider', 'Transaction ID', 'Amount', 'Status', 'Created At', 'Paid At'],
-        ...(payments || []).map(payment => [
-          payment.id,
-          payment.order_id,
-          payment.payment_provider,
-          payment.transaction_id,
-          payment.amount,
-          payment.payment_status,
-          new Date(payment.created_at).toLocaleString(),
-          payment.paid_at ? new Date(payment.paid_at).toLocaleString() : ''
+      // Create CSV for orders
+      const ordersCSV = [
+        ['Order ID', 'Customer', 'Amount', 'Status', 'Payment Status', 'Date'],
+        ...(orders || []).map(order => [
+          order.id,
+          order.user_id,
+          order.total_amount,
+          order.order_status,
+          order.payment_status,
+          new Date(order.created_at).toLocaleString()
+        ])
+      ].map(row => row.join(',')).join('\n')
+
+      // Create CSV for products
+      const productsCSV = [
+        ['Product ID', 'Name', 'Price', 'Stock', 'Status'],
+        ...(products || []).map(product => [
+          product.id,
+          product.name,
+          product.price,
+          product.stock,
+          product.is_active ? 'Active' : 'Inactive'
         ])
       ].map(row => row.join(',')).join('\n')
 
       // Create JSON export
       const jsonStr = JSON.stringify(exportData, null, 2)
-      const csvPaymentsBlob = new Blob([paymentsCSV], { type: 'text/csv' })
+      const csvOrdersBlob = new Blob([ordersCSV], { type: 'text/csv' })
+      const csvProductsBlob = new Blob([productsCSV], { type: 'text/csv' })
       const jsonBlob = new Blob([jsonStr], { type: 'application/json' })
 
       // Download files
       const timestamp = new Date().toISOString().split('T')[0]
       
-      const paymentsLink = document.createElement('a')
-      paymentsLink.href = URL.createObjectURL(csvPaymentsBlob)
-      paymentsLink.download = `dashboard_payments_${timestamp}.csv`
-      paymentsLink.click()
+      // Create download links
+      const ordersLink = document.createElement('a')
+      ordersLink.href = URL.createObjectURL(csvOrdersBlob)
+      ordersLink.download = `dashboard_orders_${timestamp}.csv`
+      ordersLink.click()
+
+      const productsLink = document.createElement('a')
+      productsLink.href = URL.createObjectURL(csvProductsBlob)
+      productsLink.download = `dashboard_products_${timestamp}.csv`
+      productsLink.click()
 
       const jsonLink = document.createElement('a')
       jsonLink.href = URL.createObjectURL(jsonBlob)
@@ -507,7 +526,8 @@ export default function DashboardPage() {
       jsonLink.click()
 
       // Cleanup
-      URL.revokeObjectURL(paymentsLink.href)
+      URL.revokeObjectURL(ordersLink.href)
+      URL.revokeObjectURL(productsLink.href)
       URL.revokeObjectURL(jsonLink.href)
 
     } catch (error) {
@@ -566,6 +586,45 @@ export default function DashboardPage() {
     ? (revenueChange / stats.revenueYesterday) * 100 
     : revenueChange > 0 ? 100 : 0
 
+  const actionQueue = [
+    {
+      label: 'Orders to process',
+      value: stats.pendingOrders,
+      href: '/admin/orders',
+      icon: Clock,
+      tone: 'bg-yellow-50 text-yellow-700 border-yellow-200',
+    },
+    {
+      label: 'Payment checks',
+      value: recentOrders.filter((order) => order.payment_status !== 'paid').length,
+      href: '/admin/payments',
+      icon: CreditCard,
+      tone: 'bg-blue-50 text-blue-700 border-blue-200',
+    },
+    {
+      label: 'Shipping follow-ups',
+      value: recentOrders.filter((order) => ['processing', 'shipped'].includes(order.order_status)).length,
+      href: '/admin/shipping',
+      icon: Truck,
+      tone: 'bg-emerald-50 text-emerald-700 border-emerald-200',
+    },
+    {
+      label: 'Low stock',
+      value: stats.lowStockProducts,
+      href: '/admin/products',
+      icon: AlertTriangle,
+      tone: 'bg-red-50 text-red-700 border-red-200',
+    },
+  ]
+
+  const averageOrderValue = stats.completedOrders > 0
+    ? stats.totalRevenue / stats.completedOrders
+    : 0
+
+  const fulfilmentRate = stats.completedOrders + stats.cancelledOrders + stats.pendingOrders > 0
+    ? (stats.completedOrders / (stats.completedOrders + stats.cancelledOrders + stats.pendingOrders)) * 100
+    : 0
+
   return (
     <div className="space-y-8">
       {/* Header with Title and Actions */}
@@ -597,6 +656,65 @@ export default function DashboardPage() {
             <Download className="w-4 h-4" />
             <span className="text-sm">{exporting ? 'Exporting...' : 'Export Data'}</span>
           </button>
+        </div>
+      </div>
+
+      {/* Ecommerce Command Center */}
+      <div className="grid grid-cols-1 gap-4 xl:grid-cols-[1.4fr_0.6fr]">
+        <div className="rounded-2xl border border-gray-100 bg-white p-5 shadow-sm">
+          <div className="mb-4 flex items-center justify-between">
+            <div>
+              <h2 className="text-lg font-semibold text-gray-900">Action Queue</h2>
+              <p className="text-sm text-gray-500">Fast view of store work that needs attention.</p>
+            </div>
+            <Link href="/admin/orders" className="text-sm font-medium text-black hover:underline">
+              View orders
+            </Link>
+          </div>
+
+          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+            {actionQueue.map((item) => {
+              const Icon = item.icon
+              return (
+                <Link
+                  key={item.label}
+                  href={item.href}
+                  className={`rounded-xl border p-4 transition hover:-translate-y-0.5 hover:shadow-md ${item.tone}`}
+                >
+                  <div className="flex items-center justify-between">
+                    <Icon className="h-5 w-5" />
+                    <span className="text-2xl font-bold">{item.value}</span>
+                  </div>
+                  <p className="mt-3 text-sm font-medium">{item.label}</p>
+                </Link>
+              )
+            })}
+          </div>
+        </div>
+
+        <div className="rounded-2xl border border-gray-100 bg-black p-5 text-white shadow-sm">
+          <h2 className="text-lg font-semibold">Store Health</h2>
+          <div className="mt-4 space-y-4">
+            <div>
+              <div className="mb-1 flex justify-between text-sm">
+                <span className="text-gray-300">Fulfillment rate</span>
+                <span>{fulfilmentRate.toFixed(0)}%</span>
+              </div>
+              <div className="h-2 rounded-full bg-white/20">
+                <div className="h-2 rounded-full bg-yellow-400" style={{ width: `${Math.min(fulfilmentRate, 100)}%` }} />
+              </div>
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div className="rounded-xl bg-white/10 p-3">
+                <p className="text-xs text-gray-300">Avg order value</p>
+                <p className="mt-1 text-lg font-bold">{formatCurrency(averageOrderValue)}</p>
+              </div>
+              <div className="rounded-xl bg-white/10 p-3">
+                <p className="text-xs text-gray-300">Pending refunds</p>
+                <p className="mt-1 text-lg font-bold">{stats.pendingRefunds}</p>
+              </div>
+            </div>
+          </div>
         </div>
       </div>
 
@@ -646,11 +764,66 @@ export default function DashboardPage() {
             </div>
           </div>
           <h3 className="text-2xl font-bold text-gray-900">{formatCurrency(stats.totalRevenue)}</h3>
-          <p className="text-sm text-gray-500 mt-1">Total Revenue (Paid)</p>
+          <p className="text-sm text-gray-500 mt-1">Total Revenue</p>
           <div className={`flex items-center gap-1 mt-2 text-xs ${revenueChange >= 0 ? 'text-green-600' : 'text-red-600'}`}>
             {revenueChange >= 0 ? <ArrowUp className="w-3 h-3" /> : <ArrowDown className="w-3 h-3" />}
             <span>{Math.abs(revenueChangePercent).toFixed(1)}% from yesterday</span>
           </div>
+        </div>
+      </div>
+
+      {/* Quick Actions and Low Stock */}
+      <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
+        <div className="rounded-2xl border border-gray-100 bg-white p-6 shadow-sm lg:col-span-1">
+          <h2 className="text-lg font-semibold text-gray-900">Quick Actions</h2>
+          <div className="mt-4 grid gap-3">
+            <Link href="/admin/products/new" className="flex items-center justify-between rounded-xl border border-gray-200 px-4 py-3 text-sm font-medium transition hover:border-black hover:bg-gray-50">
+              <span className="flex items-center gap-2"><Plus className="h-4 w-4" /> Add product</span>
+              <span>Go</span>
+            </Link>
+            <Link href="/admin/vouchers" className="flex items-center justify-between rounded-xl border border-gray-200 px-4 py-3 text-sm font-medium transition hover:border-black hover:bg-gray-50">
+              <span className="flex items-center gap-2"><DollarSign className="h-4 w-4" /> Manage vouchers</span>
+              <span>Go</span>
+            </Link>
+            <Link href="/admin/notifications" className="flex items-center justify-between rounded-xl border border-gray-200 px-4 py-3 text-sm font-medium transition hover:border-black hover:bg-gray-50">
+              <span className="flex items-center gap-2"><Eye className="h-4 w-4" /> Send notification</span>
+              <span>Go</span>
+            </Link>
+          </div>
+        </div>
+
+        <div className="rounded-2xl border border-gray-100 bg-white p-6 shadow-sm lg:col-span-2">
+          <div className="mb-4 flex items-center justify-between">
+            <div>
+              <h2 className="text-lg font-semibold text-gray-900">Low Stock Watchlist</h2>
+              <p className="text-sm text-gray-500">Restock these products before they block sales.</p>
+            </div>
+            <Link href="/admin/products" className="text-sm font-medium text-black hover:underline">
+              Manage inventory
+            </Link>
+          </div>
+
+          {lowStockProducts.length === 0 ? (
+            <div className="rounded-xl bg-green-50 p-4 text-sm text-green-700">Inventory looks healthy right now.</div>
+          ) : (
+            <div className="grid gap-3 sm:grid-cols-2">
+              {lowStockProducts.map((product) => (
+                <Link
+                  key={product.id}
+                  href={`/admin/products/${product.id}`}
+                  className="flex items-center justify-between rounded-xl border border-gray-200 px-4 py-3 transition hover:border-red-200 hover:bg-red-50"
+                >
+                  <div className="min-w-0">
+                    <p className="truncate text-sm font-medium text-gray-900">{product.name}</p>
+                    <p className="text-xs text-gray-500">{formatCurrency(product.price)}</p>
+                  </div>
+                  <span className="rounded-full bg-red-100 px-3 py-1 text-xs font-semibold text-red-700">
+                    {product.stock} left
+                  </span>
+                </Link>
+              ))}
+            </div>
+          )}
         </div>
       </div>
 

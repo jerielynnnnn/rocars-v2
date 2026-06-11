@@ -21,10 +21,6 @@ interface Product {
   created_at: string
   is_on_sale?: boolean
   discount_percent?: number | null
-  category?: {
-    name: string
-    slug: string
-  }
 }
 
 interface ProductImage {
@@ -54,11 +50,9 @@ export default function ProductDetailPage() {
   const [error, setError] = useState<string | null>(null)
   const [selectedImage, setSelectedImage] = useState<string>('')
   const [quantity, setQuantity] = useState(1)
-  const [addingToCart, setAddingToCart] = useState(false)
   const [isWishlisted, setIsWishlisted] = useState(false)
   const [activeTab, setActiveTab] = useState<'details' | 'reviews'>('details')
-  const [addingStates, setAddingStates] = useState<Map<number, boolean>>(new Map())
-  const [buyingStates, setBuyingStates] = useState<Map<number, boolean>>(new Map())
+  const [addingToCart, setAddingToCart] = useState(false)
   const [session, setSession] = useState<any>(null)
 
   // Fetch product data
@@ -84,57 +78,76 @@ export default function ProductDetailPage() {
     setLoading(true)
     setError(null)
 
-    const { data: productData, error: productError } = await supabase
-      .from('products')
-      .select('*, categories!inner(name, slug)')
-      .eq('slug', slug)
-      .eq('is_active', true)
-      .single()
+    try {
+      // First, get the product by slug
+      const { data: productData, error: productError } = await supabase
+        .from('products')
+        .select('*')
+        .eq('slug', slug)
+        .eq('is_active', true)
+        .single()
 
-    if (productError || !productData) {
-      setError('Product not found')
-      setLoading(false)
-      return
-    }
+      if (productError) {
+        console.error('Product fetch error:', productError)
+        setError('Product not found')
+        setLoading(false)
+        return
+      }
 
-    const transformedProduct: Product = {
-      ...productData,
-      category: productData.categories
-    }
-    
-    setProduct(transformedProduct)
+      if (!productData) {
+        setError('Product not found')
+        setLoading(false)
+        return
+      }
+      
+      setProduct(productData)
 
-    // Fetch images and reviews in parallel
-    const [{ data: imageData }, { data: reviewData }] = await Promise.all([
-      supabase
+      // Fetch images for this product - try without ordering first
+      const { data: imageData, error: imageError } = await supabase
         .from('product_images')
         .select('*')
         .eq('product_id', productData.id)
-        .order('is_primary', { ascending: false }),
-      supabase
-        .from('reviews')
-        .select('*')
-        .eq('product_id', productData.id)
-        .order('created_at', { ascending: false })
-    ])
 
-    setImages(imageData || [])
-    setReviews(reviewData || [])
+      if (imageError) {
+        console.error('Image fetch error:', imageError)
+        // Try alternative table name
+        const { data: altImageData } = await supabase
+          .from('product_image')
+          .select('*')
+          .eq('product_id', productData.id)
+        
+        if (altImageData && altImageData.length > 0) {
+          setImages(altImageData)
+          setSelectedImage(altImageData[0].image_url)
+        }
+      } else {
+        setImages(imageData || [])
+        if (imageData && imageData.length > 0) {
+          setSelectedImage(imageData[0].image_url)
+        }
+      }
 
-    if (imageData && imageData.length > 0) {
-      setSelectedImage(imageData[0].image_url)
+      // Fetch reviews through an API route so public product pages do not depend on browser RLS.
+      const reviewResponse = await fetch(`/api/products/${productData.id}/reviews`)
+      if (reviewResponse.ok) {
+        const reviewResult = await reviewResponse.json()
+        setReviews(reviewResult.reviews || [])
+      } else {
+        setReviews([])
+      }
+
+    } catch (err) {
+      console.error('Unexpected error:', err)
+      setError('Failed to load product')
+    } finally {
+      setLoading(false)
     }
-
-    setLoading(false)
   }
 
   const addToCart = async () => {
     if (!product) return
     
-    if (addingStates.get(product.id)) return
-    setAddingStates((prev) => new Map(prev).set(product.id, true))
-    
-    await new Promise(resolve => setTimeout(resolve, 300))
+    setAddingToCart(true)
     
     const cart = JSON.parse(localStorage.getItem('cart') || '[]')
     const existing = cart.find((item: any) => item.id === product.id)
@@ -148,7 +161,7 @@ export default function ProductDetailPage() {
         id: product.id,
         name: product.name,
         price: finalPrice,
-        image: images[0]?.image_url || '/placeholder-product.jpg',
+        image: images[0]?.image_url || null,
         quantity: quantity,
         stock: product.stock
       })
@@ -157,9 +170,7 @@ export default function ProductDetailPage() {
     localStorage.setItem('cart', JSON.stringify(cart))
     window.dispatchEvent(new Event('cartUpdated'))
     
-    setTimeout(() => {
-      setAddingStates((prev) => new Map(prev).set(product.id, false))
-    }, 1000)
+    setTimeout(() => setAddingToCart(false), 500)
   }
 
   const handleBuyNow = async () => {
@@ -170,46 +181,31 @@ export default function ProductDetailPage() {
       return
     }
 
-    if (buyingStates.get(product.id)) return
-    setBuyingStates((prev) => new Map(prev).set(product.id, true))
+    const finalPrice = product.sale_price || product.price
 
-    try {
-      const finalPrice = product.sale_price || product.price
-
-      const checkoutSummary = {
-        items: [{
-          id: product.id,
-          name: product.name,
-          price: Number(finalPrice),
-          originalPrice: product.price,
-          image: images[0]?.image_url || '/placeholder-product.jpg',
-          quantity: quantity,
-          stock: product.stock,
-          is_on_sale: product.is_on_sale,
-          discount_percent: product.discount_percent,
-          brand: product.brand
-        }],
-        subtotal: Number(finalPrice) * quantity,
-        shippingFee: 0,
-        address: null,
-        isSingleItem: true
-      }
-      
-      localStorage.setItem('checkoutSummary', JSON.stringify(checkoutSummary))
-      sessionStorage.setItem('checkoutProduct', JSON.stringify(checkoutSummary.items[0]))
-      
-      setTimeout(() => {
-        window.location.href = '/checkout'
-      }, 100)
-      
-    } catch (error) {
-      console.error('Buy now error:', error)
-      alert('Something went wrong. Please try again.')
-    } finally {
-      setTimeout(() => {
-        setBuyingStates((prev) => new Map(prev).set(product.id, false))
-      }, 1000)
+    const checkoutSummary = {
+      items: [{
+        id: product.id,
+        name: product.name,
+        price: Number(finalPrice),
+        originalPrice: product.price,
+        image: images[0]?.image_url || null,
+        quantity: quantity,
+        stock: product.stock,
+        is_on_sale: product.is_on_sale,
+        discount_percent: product.discount_percent,
+        brand: product.brand
+      }],
+      subtotal: Number(finalPrice) * quantity,
+      shippingFee: 0,
+      address: null,
+      isSingleItem: true
     }
+    
+    localStorage.setItem('checkoutSummary', JSON.stringify(checkoutSummary))
+    sessionStorage.setItem('checkoutProduct', JSON.stringify(checkoutSummary.items[0]))
+    
+    window.location.href = '/checkout'
   }
 
   const toggleWishlist = async () => {
@@ -249,7 +245,6 @@ export default function ProductDetailPage() {
       style: 'currency',
       currency: 'PHP',
       minimumFractionDigits: 2,
-      maximumFractionDigits: 2,
     }).format(price)
 
   const calculateAverageRating = () => {
@@ -310,7 +305,7 @@ export default function ProductDetailPage() {
         <div className="container mx-auto px-4 py-8 text-center">
           <div className="text-6xl mb-4">🔍</div>
           <h1 className="text-2xl font-bold mb-2">Product Not Found</h1>
-          <p className="text-gray-500 mb-6">The product you're looking for doesn't exist or has been removed.</p>
+          <p className="text-gray-500 mb-6">{error || "The product you're looking for doesn't exist."}</p>
           <Link href="/products" className="inline-flex items-center gap-2 px-6 py-3 bg-black text-white rounded-lg hover:bg-gray-800 transition">
             <ChevronLeft className="w-4 h-4" />
             Back to Products
@@ -324,8 +319,6 @@ export default function ProductDetailPage() {
   const displayPrice = product.sale_price || product.price
   const originalPrice = product.price
   const hasDiscount = !!product.sale_price && product.sale_price < product.price
-  const isAdding = addingStates.get(product.id)
-  const isBuying = buyingStates.get(product.id)
 
   return (
     <div className="min-h-screen bg-gray-50 pt-24">
@@ -347,11 +340,21 @@ export default function ProductDetailPage() {
           {/* Left Column - Images */}
           <div>
             <div className="bg-white rounded-2xl overflow-hidden border border-gray-200 mb-4 shadow-sm">
-              <img
-                src={selectedImage || '/placeholder-product.jpg'}
-                alt={product.name}
-                className="w-full h-auto object-cover"
-              />
+              {selectedImage ? (
+                <img
+                  src={selectedImage}
+                  alt={product.name}
+                  className="w-full h-auto object-cover"
+                  onError={(e) => {
+                    // Use data URL fallback
+                    (e.target as HTMLImageElement).src = 'data:image/svg+xml,%3Csvg xmlns="http://www.w3.org/2000/svg" width="400" height="400" viewBox="0 0 24 24" fill="none" stroke="%23999" stroke-width="1"%3E%3Crect x="2" y="2" width="20" height="20" rx="2" fill="%23f3f4f6"/%3E%3Cpath d="M8 10h.01M16 10h.01M8 16h8" stroke-linecap="round"/%3E%3C/svg%3E'
+                  }}
+                />
+              ) : (
+                <div className="w-full h-96 flex items-center justify-center bg-gray-100">
+                  <Package className="w-16 h-16 text-gray-400" />
+                </div>
+              )}
             </div>
             
             {images.length > 1 && (
@@ -364,7 +367,14 @@ export default function ProductDetailPage() {
                       selectedImage === image.image_url ? 'border-black ring-2 ring-black/20' : 'border-gray-200 hover:border-gray-400'
                     }`}
                   >
-                    <img src={image.image_url} alt={`${product.name} - ${idx + 1}`} className="w-full h-full object-cover" />
+                    <img 
+                      src={image.image_url} 
+                      alt={`${product.name} - ${idx + 1}`} 
+                      className="w-full h-full object-cover"
+                      onError={(e) => {
+                        (e.target as HTMLImageElement).src = 'data:image/svg+xml,%3Csvg xmlns="http://www.w3.org/2000/svg" width="100" height="100" viewBox="0 0 24 24" fill="none" stroke="%23999"%3E%3Crect x="2" y="2" width="20" height="20" rx="2" fill="%23f3f4f6"/%3E%3C/svg%3E'
+                      }}
+                    />
                   </button>
                 ))}
               </div>
@@ -374,7 +384,7 @@ export default function ProductDetailPage() {
           {/* Right Column - Product Info */}
           <div>
             <div className="mb-2">
-              <span className="text-xs uppercase tracking-wide text-gray-400 font-medium">{product.brand}</span>
+              <span className="text-xs uppercase tracking-wide text-gray-400 font-medium">{product.brand || 'ROCARS'}</span>
             </div>
             
             <h1 className="text-2xl md:text-3xl font-bold text-black mb-2">
@@ -382,7 +392,7 @@ export default function ProductDetailPage() {
             </h1>
             
             <div className="flex items-center gap-2 mb-3">
-              <span className="text-xs text-gray-400">SKU: {product.sku}</span>
+              <span className="text-xs text-gray-400">SKU: {product.sku || 'N/A'}</span>
             </div>
             
             <div className="flex items-center gap-3 mb-4">
@@ -465,14 +475,14 @@ export default function ProductDetailPage() {
             <div className="flex gap-3 mb-6">
               <button
                 onClick={addToCart}
-                disabled={product.stock <= 0 || isAdding}
+                disabled={product.stock <= 0 || addingToCart}
                 className={`flex-1 py-3 rounded-xl font-medium transition flex items-center justify-center gap-2 ${
                   product.stock <= 0 
                     ? 'bg-gray-300 cursor-not-allowed text-gray-500' 
                     : 'bg-black text-white hover:bg-yellow-400 hover:text-black'
                 }`}
               >
-                {isAdding ? (
+                {addingToCart ? (
                   <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin" />
                 ) : (
                   <>
@@ -502,14 +512,9 @@ export default function ProductDetailPage() {
             {product.stock > 0 && (
               <button
                 onClick={handleBuyNow}
-                disabled={isBuying}
                 className="w-full py-3 text-center border-2 border-black text-black font-medium rounded-xl hover:bg-black hover:text-white transition duration-300 mb-6"
               >
-                {isBuying ? (
-                  <div className="w-5 h-5 border-2 border-black border-t-transparent rounded-full animate-spin mx-auto" />
-                ) : (
-                  'Buy Now'
-                )}
+                Buy Now
               </button>
             )}
             
@@ -562,30 +567,6 @@ export default function ProductDetailPage() {
               <div className="space-y-4">
                 <h3 className="font-semibold text-black">Product Description</h3>
                 <p className="text-gray-600 leading-relaxed">{product.description}</p>
-                
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mt-6">
-                  <div className="bg-gray-50 rounded-xl p-4 border border-gray-100">
-                    <h4 className="font-medium text-black mb-2">Product Specifications</h4>
-                    <dl className="space-y-2 text-sm">
-                      <div className="flex justify-between">
-                        <dt className="text-gray-500">Brand</dt>
-                        <dd className="text-black font-medium">{product.brand}</dd>
-                      </div>
-                      <div className="flex justify-between">
-                        <dt className="text-gray-500">SKU</dt>
-                        <dd className="text-black font-medium">{product.sku}</dd>
-                      </div>
-                      <div className="flex justify-between">
-                        <dt className="text-gray-500">Category</dt>
-                        <dd className="text-black font-medium">{product.category?.name}</dd>
-                      </div>
-                      <div className="flex justify-between">
-                        <dt className="text-gray-500">Stock Status</dt>
-                        <dd className="text-black font-medium">{product.stock} units</dd>
-                      </div>
-                    </dl>
-                  </div>
-                </div>
               </div>
             )}
 

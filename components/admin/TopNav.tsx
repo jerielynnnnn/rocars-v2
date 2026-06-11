@@ -2,7 +2,7 @@
 'use client';
 
 import { usePathname } from 'next/navigation';
-import { Download, Calendar, Filter } from 'lucide-react';
+import { Download, Calendar } from 'lucide-react';
 import { useState } from 'react';
 
 interface ExportFilters {
@@ -34,6 +34,7 @@ export function TopNav() {
       case 'products': return 'Products Management';
       case 'orders': return 'Orders Management';
       case 'payments': return 'Payments Management';
+      case 'refunds': return 'Refunds Management';
       case 'reviews': return 'Reviews Management';
       case 'categories': return 'Categories Management';
       case 'shipping': return 'Shipping Management';
@@ -201,7 +202,7 @@ export function TopNav() {
                     <label className="block text-sm font-medium text-gray-700 mb-2">Data Type</label>
                     <select
                       value={filters.dataType}
-                      onChange={(e) => setFilters({ ...filters, dataType: e.target.value as any })}
+                      onChange={(e) => setFilters({ ...filters, dataType: e.target.value as ExportFilters['dataType'] })}
                       className="w-full px-3 py-2 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
                     >
                       <option value="sales">Sales Data</option>
@@ -238,7 +239,7 @@ export function TopNav() {
                       {['csv', 'excel', 'json'].map((format) => (
                         <button
                           key={format}
-                          onClick={() => setFilters({ ...filters, format: format as any })}
+                          onClick={() => setFilters({ ...filters, format: format as ExportFilters['format'] })}
                           className={`px-3 py-2 text-sm rounded-lg border transition-all ${
                             filters.format === format
                               ? 'border-blue-500 bg-blue-50 text-blue-700'

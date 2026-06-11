@@ -3,6 +3,7 @@
 
 import { useEffect, useMemo, useState } from 'react'
 import { supabase } from '@/lib/supabase'
+import { logAdminActivity } from '@/lib/admin-activity'
 import {
   CreditCard,
   Search,
@@ -88,59 +89,24 @@ export default function AdminPaymentsPage() {
     setLoading(true)
 
     try {
-      const { data: paymentsData, error: paymentsError } = await supabase
-        .from('payments')
-        .select('*')
-        .order('created_at', { ascending: false })
-
-      if (paymentsError) throw paymentsError
-
-      if (!paymentsData || paymentsData.length === 0) {
-        setPayments([])
-        setLoading(false)
-        return
+      const { data: { session } } = await supabase.auth.getSession()
+      if (!session?.access_token) {
+        throw new Error('Staff authentication required')
       }
 
-      const orderIds = [...new Set(paymentsData.map(payment => payment.order_id).filter(Boolean))]
-
-      let ordersMap = new Map()
-      if (orderIds.length > 0) {
-        const { data: ordersData, error: ordersError } = await supabase
-          .from('orders')
-          .select('id, payment_method, total_amount, payment_status, order_status, user_id')
-          .in('id', orderIds)
-
-        if (!ordersError && ordersData) {
-          ordersMap = new Map(ordersData.map(order => [order.id, order]))
-        }
-      }
-
-      const userIds = [...new Set(Array.from(ordersMap.values()).map(order => order.user_id).filter(Boolean))]
-
-      let profilesMap = new Map()
-      if (userIds.length > 0) {
-        const { data: profilesData, error: profilesError } = await supabase
-          .from('profiles')
-          .select('id, first_name, last_name, email')
-          .in('id', userIds)
-
-        if (!profilesError && profilesData) {
-          profilesMap = new Map(profilesData.map(profile => [profile.id, profile]))
-        }
-      }
-
-      const enrichedPayments = paymentsData.map(payment => {
-        const order = ordersMap.get(payment.order_id) || null
-        const customer = order ? profilesMap.get(order.user_id) : null
-        
-        return {
-          ...payment,
-          order: order,
-          customer: customer
-        }
+      const response = await fetch('/api/admin/payments', {
+        headers: {
+          Authorization: `Bearer ${session.access_token}`,
+        },
       })
 
-      setPayments(enrichedPayments)
+      const result = await response.json()
+
+      if (!response.ok) {
+        throw new Error(result.error || 'Failed to fetch payments')
+      }
+
+      setPayments(result.payments || [])
     } catch (error) {
       console.error('Error fetching payments:', error)
     } finally {
@@ -156,6 +122,46 @@ export default function AdminPaymentsPage() {
   setUpdatingStatus(true)
 
   try {
+    const { data: { session } } = await supabase.auth.getSession()
+    if (!session?.access_token) {
+      throw new Error('Staff authentication required')
+    }
+
+    const response = await fetch('/api/admin/payments', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${session.access_token}`,
+      },
+      body: JSON.stringify({ paymentId, newStatus, orderId }),
+    })
+
+    const result = await response.json()
+
+    if (!response.ok) {
+      throw new Error(result.error || 'Failed to update payment status')
+    }
+
+    await logAdminActivity({
+      action: 'UPDATE_PAYMENT_STATUS',
+      target_type: 'payment',
+      target_id: paymentId,
+      details: { payment_status: newStatus, order_id: orderId },
+    })
+
+    await fetchPayments()
+
+    if (selectedPayment && selectedPayment.id === paymentId) {
+      setSelectedPayment({
+        ...selectedPayment,
+        payment_status: newStatus,
+        paid_at: newStatus === 'paid' ? new Date().toISOString() : selectedPayment.paid_at
+      })
+    }
+
+    alert(`Payment marked as ${newStatus.toUpperCase()} successfully!`)
+    return
+
     console.log('=== UPDATE PAYMENT STATUS START ===')
     console.log('Payment ID:', paymentId)
     console.log('New Status:', newStatus)
@@ -212,28 +218,33 @@ export default function AdminPaymentsPage() {
       
       console.log('Attempting to insert history data:', historyData)
       
-      const { data: historyResult, error: historyError } = await supabase
-        .from('order_status_history')
-        .insert(historyData)
-        .select()
-
-      if (historyError) {
-        // Log detailed error information
-        console.error('Status history error details:', {
-          message: historyError.message,
-          code: historyError.code,
-          details: historyError.details,
-          hint: historyError.hint
-        })
-        console.error('Failed to insert history data:', historyData)
-        
-        // Check if it's an RLS issue
-        if (historyError.code === '42501') {
-          console.error('RLS POLICY ERROR: You need to enable INSERT for order_status_history table')
+      try {
+        const { data: { session } } = await supabase.auth.getSession()
+        if (!session?.access_token) {
+          throw new Error('Admin authentication required')
         }
-        // Don't throw - this is non-critical for payment marking
-      } else {
-        console.log('Status history added successfully:', historyResult)
+
+        const historyResponse = await fetch('/api/admin/payment-status', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${session.access_token}`,
+          },
+          body: JSON.stringify({
+            action: 'log-status-history',
+            historyData,
+          }),
+        })
+
+        const historyResult = await historyResponse.json()
+
+        if (!historyResponse.ok) {
+          console.error('Status history API error:', historyResult)
+        } else {
+          console.log('Status history added successfully:', historyResult)
+        }
+      } catch (historyErr) {
+        console.error('Status history API failed:', historyErr)
       }
 
       // Step 4: Add notification
@@ -254,12 +265,31 @@ export default function AdminPaymentsPage() {
             is_read: false
           }
           
-          const { error: notifError } = await supabase
-            .from('notifications')
-            .insert(notificationData)
+          const { data: { session } } = await supabase.auth.getSession()
+          if (!session?.access_token) {
+            throw new Error('Admin authentication required')
+          }
 
-          if (notifError) {
-            console.error('Notification error:', notifError)
+          const notifResponse = await fetch('/api/admin/payment-status', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              Authorization: `Bearer ${session.access_token}`,
+            },
+            body: JSON.stringify({
+              action: 'create-notification',
+              notificationData: {
+                ...notificationData,
+                type: 'general',
+                created_at: new Date().toISOString(),
+              },
+            }),
+          })
+
+          const notifResult = await notifResponse.json()
+
+          if (!notifResponse.ok) {
+            console.error('Notification API error:', notifResult)
           } else {
             console.log('Notification created successfully')
           }
@@ -281,19 +311,45 @@ export default function AdminPaymentsPage() {
           .single()
 
         if (orderData) {
-          await supabase
-            .from('notifications')
-            .insert({
-              user_id: orderData.user_id,
-              title: 'Payment Failed ❌',
-              message: `Your payment for order #${orderId} has failed. Please try again or contact support.`,
-              is_read: false
+          const { data: { session } } = await supabase.auth.getSession()
+          if (session?.access_token) {
+            const response = await fetch('/api/admin/payment-status', {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+                Authorization: `Bearer ${session.access_token}`,
+              },
+              body: JSON.stringify({
+                action: 'create-notification',
+                notificationData: {
+                  user_id: orderData.user_id,
+                  title: 'Payment Failed ❌',
+                  message: `Your payment for order #${orderId} has failed. Please try again or contact support.`,
+                  is_read: false,
+                  type: 'general',
+                  created_at: new Date().toISOString(),
+                },
+              }),
             })
+
+            const result = await response.json()
+            if (!response.ok) {
+              console.error('Failed notification API error:', result)
+            }
+          }
         }
       } catch (notifErr) {
         console.error('Failed notification error:', notifErr)
       }
     }
+
+    // Step 6: Refresh data
+    await logAdminActivity({
+      action: 'UPDATE_PAYMENT_STATUS',
+      target_type: 'payment',
+      target_id: paymentId,
+      details: { payment_status: newStatus, order_id: orderId },
+    })
 
     // Step 6: Refresh data
     await fetchPayments()

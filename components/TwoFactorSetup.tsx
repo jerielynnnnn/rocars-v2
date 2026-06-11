@@ -2,6 +2,7 @@
 "use client"
 
 import { useState } from 'react'
+import Image from 'next/image'
 import { Loader2, Copy, Download, AlertCircle, CheckCircle } from 'lucide-react'
 
 interface TwoFactorSetupProps {
@@ -12,6 +13,7 @@ interface TwoFactorSetupProps {
 export default function TwoFactorSetup({ onComplete, onCancel }: TwoFactorSetupProps) {
   const [step, setStep] = useState<'setup' | 'verify'>('setup')
   const [secret, setSecret] = useState('')
+  const [qrCode, setQrCode] = useState('')
   const [backupCodes, setBackupCodes] = useState<string[]>([])
   const [verificationCode, setVerificationCode] = useState('')
   const [loading, setLoading] = useState(false)
@@ -33,6 +35,7 @@ export default function TwoFactorSetup({ onComplete, onCancel }: TwoFactorSetupP
       
       if (response.ok) {
         setSecret(data.secret)
+        setQrCode(data.qrCode || '')
         setBackupCodes(data.backupCodes || [])
         setStep('verify')
       } else {
@@ -112,7 +115,7 @@ export default function TwoFactorSetup({ onComplete, onCancel }: TwoFactorSetupP
               </p>
               <p className="text-sm text-blue-700">
                 Two-factor authentication adds an extra layer of security to your account. 
-                You'll need to enter a 6-digit code from your authenticator app when signing in.
+                You will need to enter a 6-digit code from your authenticator app when signing in.
               </p>
             </div>
           </div>
@@ -156,8 +159,21 @@ export default function TwoFactorSetup({ onComplete, onCancel }: TwoFactorSetupP
         
         <div className="bg-gray-50 rounded-lg border border-gray-200 p-4">
           <p className="text-sm text-gray-600 mb-3">
-            Open your authenticator app (Google Authenticator, Microsoft Authenticator, or Authy) and add a new account using this secret key:
+            Open your authenticator app (Google Authenticator, Microsoft Authenticator, or Authy) and scan the QR code or add this secret key:
           </p>
+          
+          {qrCode && (
+            <div className="flex justify-center mb-3">
+              <Image
+                src={qrCode}
+                alt="Two-factor authentication QR code"
+                width={176}
+                height={176}
+                unoptimized
+                className="h-44 w-44 rounded-lg border border-gray-200 bg-white p-2"
+              />
+            </div>
+          )}
           
           <div className="bg-white rounded-lg border border-gray-300 p-3 mb-3">
             <code className="text-sm font-mono break-all block text-center">
@@ -183,7 +199,7 @@ export default function TwoFactorSetup({ onComplete, onCancel }: TwoFactorSetupP
           </button>
           
           <p className="text-xs text-gray-500 mt-3 text-center">
-            Or scan QR code with your authenticator app if available
+            Keep this secret private. Anyone with it can generate your login codes.
           </p>
         </div>
       </div>

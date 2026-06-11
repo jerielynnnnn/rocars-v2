@@ -12,7 +12,6 @@ import {
   User,
   Menu,
   X,
-  Search,
   LogOut,
   Ticket,
   ChevronDown,
@@ -24,15 +23,66 @@ import {
   Users,
   ShoppingBag,
   CreditCard,
+  RefreshCw,
   Star,
   Tags,
   Truck,
   Settings,
   CheckCheck,
+  AlertTriangle,
 } from 'lucide-react'
 
 import { supabase } from '@/lib/supabase'
 import { useCart } from '@/context/CartContext'
+import { canAccessAdminPath, isAdminLikeRole, STAFF_DEFAULT_ADMIN_PATH } from '@/lib/admin-role'
+
+// ============================================
+// TYPES
+// ============================================
+
+interface Notification {
+  id: number
+  title: string
+  message: string
+  is_read: boolean
+  created_at: string
+  user_id: string
+  type?: string
+  link?: string
+}
+
+interface AdminNotification {
+  id: string
+  type: 'low_stock' | 'new_order' | 'pending_refund' | 'pending_review'
+  title: string
+  message: string
+  created_at: string
+  is_read: boolean
+  link: string
+  metadata?: Record<string, unknown>
+}
+
+interface ProfileRealtimePayload {
+  role: string | null
+  avatar_url: string | null
+  first_name: string | null
+  last_name: string | null
+  username: string | null
+}
+
+interface LowStockProduct {
+  id: string
+  name: string
+  stock: number
+}
+
+interface PendingOrder {
+  id: string
+  total_amount: number
+  created_at: string
+}
+
+const ADMIN_DISMISSED_NOTIFS_KEY = 'rocars_dismissed_admin_notifications'
 
 export default function Navbar() {
   const pathname = usePathname()
@@ -41,7 +91,6 @@ export default function Navbar() {
 
   const [session, setSession] = useState<Session | null>(null)
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false)
-  const [searchTerm, setSearchTerm] = useState('')
   const [showUserMenu, setShowUserMenu] = useState(false)
   const [wishlistCount, setWishlistCount] = useState(0)
   const [userRole, setUserRole] = useState<string | null>(null)
@@ -51,15 +100,39 @@ export default function Navbar() {
   const [adminNotifCount, setAdminNotifCount] = useState(0)
   const [isLoading, setIsLoading] = useState(true)
   const [showNotifications, setShowNotifications] = useState(false)
-  const [notifications, setNotifications] = useState<any[]>([])
+  const [notifications, setNotifications] = useState<Notification[]>([])
   const [loadingNotifs, setLoadingNotifs] = useState(false)
+  const [showAdminNotifications, setShowAdminNotifications] = useState(false)
+  const [adminNotifications, setAdminNotifications] = useState<AdminNotification[]>([])
+  const [loadingAdminNotifs, setLoadingAdminNotifs] = useState(false)
 
   const userMenuRef = useRef<HTMLDivElement>(null)
   const notifMenuRef = useRef<HTMLDivElement>(null)
+  const adminNotifMenuRef = useRef<HTMLDivElement>(null)
 
   const isAuthPage = pathname === '/login' || pathname === '/register'
   const isAdmin = userRole === 'admin'
+  const isStaff = isAdminLikeRole(userRole)
   const isOnAdminRoute = pathname?.startsWith('/admin')
+  const adminHomeHref = isAdmin ? '/admin/dashboard' : STAFF_DEFAULT_ADMIN_PATH
+
+  const getDismissedAdminNotificationIds = () => {
+    if (typeof window === 'undefined') return new Set<string>()
+
+    try {
+      return new Set(JSON.parse(localStorage.getItem(ADMIN_DISMISSED_NOTIFS_KEY) || '[]') as string[])
+    } catch {
+      return new Set<string>()
+    }
+  }
+
+  const dismissAdminNotificationIds = (ids: string[]) => {
+    if (typeof window === 'undefined') return
+
+    const dismissedIds = getDismissedAdminNotificationIds()
+    ids.forEach((id) => dismissedIds.add(id))
+    localStorage.setItem(ADMIN_DISMISSED_NOTIFS_KEY, JSON.stringify([...dismissedIds]))
+  }
 
   // Fetch user profile
   const fetchUserProfile = async (userId: string) => {
@@ -70,7 +143,6 @@ export default function Navbar() {
       .single()
 
     if (!error && data) {
-      console.log('Fetched user role:', data.role)
       setUserRole(data.role)
       setUserAvatar(data.avatar_url)
       const displayName = data.first_name
@@ -102,8 +174,8 @@ export default function Navbar() {
         .limit(20)
 
       if (!error && data) {
-        setNotifications(data)
-        const unreadCount = data.filter(n => !n.is_read).length
+        setNotifications(data as Notification[])
+        const unreadCount = data.filter((n: Notification) => !n.is_read).length
         setNotifCount(unreadCount)
       }
     } catch (error) {
@@ -113,41 +185,180 @@ export default function Navbar() {
     }
   }
 
-  // Fetch admin notifications
+  // Fetch admin notifications from database
   const fetchAdminNotifications = async () => {
-    if (!isAdmin) return
+    if (!isStaff) return
 
-    const { count: lowStockCount } = await supabase
-      .from('products')
-      .select('*', { count: 'exact', head: true })
-      .lt('stock', 10)
-      .eq('is_active', true)
+    setLoadingAdminNotifs(true)
+    try {
+      const notificationsList: AdminNotification[] = []
+      const dismissedIds = getDismissedAdminNotificationIds()
+      const { data: { session: currentSession } } = await supabase.auth.getSession()
+      
+      if (currentSession?.access_token) {
+        const response = await fetch('/api/admin/notifications', {
+          headers: {
+            Authorization: `Bearer ${currentSession.access_token}`,
+          },
+        })
+        const result = await response.json()
 
-    const oneDayAgo = new Date()
-    oneDayAgo.setDate(oneDayAgo.getDate() - 1)
+        if (response.ok && result.notifications) {
+          result.notifications.forEach((notif: AdminNotification) => {
+            notificationsList.push({
+              id: notif.id,
+              type: notif.type,
+              title: notif.title,
+              message: notif.message,
+              created_at: notif.created_at,
+              is_read: notif.is_read,
+              link: notif.link,
+              metadata: notif.metadata
+            })
+          })
+        }
+      }
 
-    const { count: newOrdersCount } = await supabase
-      .from('orders')
-      .select('*', { count: 'exact', head: true })
-      .eq('order_status', 'pending_payment')
-      .gte('created_at', oneDayAgo.toISOString())
+      // Fetch low stock products for real-time alerts
+      const { data: lowStockProducts } = await supabase
+        .from('products')
+        .select('id, name, stock')
+        .lt('stock', 10)
+        .eq('is_active', true)
 
-    const { count: pendingRefundsCount } = await supabase
-      .from('refunds')
-      .select('*', { count: 'exact', head: true })
-      .eq('refund_status', 'pending')
+      if (lowStockProducts && lowStockProducts.length > 0) {
+        (lowStockProducts as LowStockProduct[]).forEach(product => {
+          // Check if notification already exists
+          const exists = notificationsList.some(n => 
+            n.metadata?.product_id === product.id || n.id === `lowstock-${product.id}`
+          )
+          if (!exists && !dismissedIds.has(`lowstock-${product.id}`)) {
+            notificationsList.push({
+              id: `lowstock-${product.id}`,
+              type: 'low_stock',
+              title: '⚠️ Low Stock Alert',
+              message: `${product.name} has only ${product.stock} items left in stock`,
+              created_at: new Date().toISOString(),
+              is_read: false,
+              link: `/admin/products?edit=${product.id}`,
+              metadata: { product_id: product.id, stock: product.stock }
+            })
+          }
+        })
+      }
 
-    const { count: unreadNotifs } = await supabase
-      .from('notifications')
-      .select('*', { count: 'exact', head: true })
-      .eq('is_read', false)
-      .is('user_id', null)
+      // Fetch pending orders
+      const { data: pendingOrders } = await supabase
+        .from('orders')
+        .select('id, total_amount, created_at')
+        .eq('order_status', 'pending_payment')
+        .order('created_at', { ascending: false })
+        .limit(5)
 
-    const total = (lowStockCount || 0) + (newOrdersCount || 0) + (pendingRefundsCount || 0) + (unreadNotifs || 0)
-    setAdminNotifCount(total)
+      if (pendingOrders && pendingOrders.length > 0) {
+        (pendingOrders as PendingOrder[]).forEach(order => {
+          const exists = notificationsList.some(n => 
+            n.metadata?.order_id === order.id || n.id === `order-${order.id}`
+          )
+          if (!exists && !dismissedIds.has(`order-${order.id}`)) {
+            notificationsList.push({
+              id: `order-${order.id}`,
+              type: 'new_order',
+              title: '🛒 New Order Received',
+              message: `Order #${order.id} - ₱${order.total_amount?.toLocaleString()} needs processing`,
+              created_at: order.created_at,
+              is_read: false,
+              link: `/admin/orders?view=${order.id}`,
+              metadata: { order_id: order.id, total_amount: order.total_amount }
+            })
+          }
+        })
+      }
+
+      // Sort by date (newest first)
+      notificationsList.sort((a, b) => 
+        new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+      )
+
+      setAdminNotifications(notificationsList)
+      const unreadCount = notificationsList.filter(n => !n.is_read).length
+      setAdminNotifCount(unreadCount)
+    } catch (error) {
+      console.error('Error fetching admin notifications:', error)
+    } finally {
+      setLoadingAdminNotifs(false)
+    }
   }
 
-  // Mark single notification as read
+  // Mark single admin notification as read
+  const markAdminNotificationAsRead = async (notificationId: string) => {
+    // Check if it's a database notification or temporary one
+    if (!notificationId.startsWith('lowstock-') && !notificationId.startsWith('order-')) {
+      try {
+        const { data: { session: currentSession } } = await supabase.auth.getSession()
+        await fetch('/api/admin/notifications', {
+          method: 'PATCH',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${currentSession?.access_token}`,
+          },
+          body: JSON.stringify({ notificationId }),
+        })
+      } catch (error) {
+        console.error('Error marking admin notification as read:', error)
+      }
+    } else {
+      dismissAdminNotificationIds([notificationId])
+    }
+    
+    setAdminNotifications(prev =>
+      prev.map(notif =>
+        notif.id === notificationId
+          ? { ...notif, is_read: true }
+          : notif
+      )
+    )
+    setAdminNotifCount(prev => Math.max(0, prev - 1))
+  }
+
+  // Mark all admin notifications as read
+  const markAllAdminNotificationsAsRead = async () => {
+    try {
+      // Update database notifications
+      const dbNotifications = adminNotifications.filter(n => 
+        !n.id.startsWith('lowstock-') && !n.id.startsWith('order-') && !n.is_read
+      )
+
+      const tempNotificationIds = adminNotifications
+        .filter(n => n.id.startsWith('lowstock-') || n.id.startsWith('order-'))
+        .map(n => n.id)
+
+      if (tempNotificationIds.length > 0) {
+        dismissAdminNotificationIds(tempNotificationIds)
+      }
+
+      if (dbNotifications.length > 0) {
+        const { data: { session: currentSession } } = await supabase.auth.getSession()
+        await fetch('/api/admin/notifications', {
+          method: 'PATCH',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${currentSession?.access_token}`,
+          },
+          body: JSON.stringify({ markAll: true }),
+        })
+      }
+      
+      setAdminNotifications(prev =>
+        prev.map(notif => ({ ...notif, is_read: true }))
+      )
+      setAdminNotifCount(0)
+    } catch (error) {
+      console.error('Error marking all admin notifications as read:', error)
+    }
+  }
+
+  // Mark single user notification as read
   const markAsRead = async (notificationId: number) => {
     try {
       const { error } = await supabase
@@ -156,9 +367,9 @@ export default function Navbar() {
         .eq('id', notificationId)
 
       if (!error) {
-        setNotifications(prev => 
-          prev.map(notif => 
-            notif.id === notificationId 
+        setNotifications(prev =>
+          prev.map(notif =>
+            notif.id === notificationId
               ? { ...notif, is_read: true }
               : notif
           )
@@ -170,7 +381,7 @@ export default function Navbar() {
     }
   }
 
-  // Mark all notifications as read
+  // Mark all user notifications as read
   const markAllAsRead = async () => {
     if (!session?.user?.id) return
 
@@ -182,7 +393,7 @@ export default function Navbar() {
         .eq('is_read', false)
 
       if (!error) {
-        setNotifications(prev => 
+        setNotifications(prev =>
           prev.map(notif => ({ ...notif, is_read: true }))
         )
         setNotifCount(0)
@@ -192,12 +403,44 @@ export default function Navbar() {
     }
   }
 
+  // Handle notification click
+  const handleNotificationClick = async (notification: Notification) => {
+    if (!notification.is_read) {
+      await markAsRead(notification.id)
+    }
+    
+    if (notification.link) {
+      router.push(notification.link)
+    } else if (notification.type === 'order_update' || notification.title.includes('Order')) {
+      router.push('/orders')
+    } else if (notification.type === 'voucher_received') {
+      router.push('/my-vouchers')
+    } else if (notification.type === 'review_reply') {
+      router.push('/reviews')
+    }
+    
+    setShowNotifications(false)
+  }
+
+  // Handle admin notification click
+  const handleAdminNotificationClick = async (notification: AdminNotification) => {
+    if (!notification.is_read) {
+      await markAdminNotificationAsRead(notification.id)
+    }
+    
+    if (notification.link) {
+      router.push(notification.link)
+    }
+    
+    setShowAdminNotifications(false)
+  }
+
   // Handle admin route redirect
   useEffect(() => {
-    if (!isLoading && isOnAdminRoute && !isAdmin) {
+    if (!isLoading && isOnAdminRoute && !isStaff) {
       router.push('/')
     }
-  }, [isOnAdminRoute, isAdmin, isLoading, router])
+  }, [isOnAdminRoute, isStaff, isLoading, router])
 
   // Load user data
   useEffect(() => {
@@ -236,11 +479,17 @@ export default function Navbar() {
 
   // Fetch admin notifications when role changes
   useEffect(() => {
-    if (isAdmin) {
-      fetchAdminNotifications()
+    if (isStaff) {
+      void Promise.resolve().then(() => fetchAdminNotifications())
 
+      // Subscribe to real-time changes
       const channel = supabase
-        .channel('admin-notifications')
+        .channel('admin-notifications-live')
+        .on(
+          'postgres_changes',
+          { event: '*', schema: 'public', table: 'admin_notifications' },
+          () => fetchAdminNotifications()
+        )
         .on(
           'postgres_changes',
           { event: 'INSERT', schema: 'public', table: 'orders' },
@@ -251,30 +500,15 @@ export default function Navbar() {
           { event: 'UPDATE', schema: 'public', table: 'products', filter: 'stock=lt.10' },
           () => fetchAdminNotifications()
         )
-        .on(
-          'postgres_changes',
-          { event: 'INSERT', schema: 'public', table: 'refunds' },
-          () => fetchAdminNotifications()
-        )
-        .on(
-          'postgres_changes',
-          { event: 'INSERT', schema: 'public', table: 'notifications' },
-          () => {
-            fetchAdminNotifications()
-            if (session?.user?.id) {
-              fetchNotifications(session.user.id)
-            }
-          }
-        )
         .subscribe()
 
       return () => {
         supabase.removeChannel(channel)
       }
     }
-  }, [isAdmin, session?.user?.id])
+  }, [isStaff])
 
-  // Subscribe to real-time notifications for the user
+  // Subscribe to real-time user notifications
   useEffect(() => {
     if (!session?.user?.id) return
 
@@ -289,7 +523,8 @@ export default function Navbar() {
           filter: `user_id=eq.${session.user.id}`
         },
         (payload) => {
-          setNotifications(prev => [payload.new as any, ...prev])
+          const newNotification = payload.new as Notification
+          setNotifications(prev => [newNotification, ...prev])
           setNotifCount(prev => prev + 1)
         }
       )
@@ -316,12 +551,13 @@ export default function Navbar() {
         },
         (payload) => {
           if (payload.new) {
-            setUserAvatar(payload.new.avatar_url)
-            const displayName = payload.new.first_name
-              ? `${payload.new.first_name} ${payload.new.last_name || ''}`.trim()
-              : payload.new.username || 'User'
+            const profile = payload.new as ProfileRealtimePayload
+            setUserAvatar(profile.avatar_url)
+            const displayName = profile.first_name
+              ? `${profile.first_name} ${profile.last_name || ''}`.trim()
+              : profile.username || 'User'
             setUserName(displayName)
-            setUserRole(payload.new.role)
+            setUserRole(profile.role)
           }
         }
       )
@@ -332,7 +568,7 @@ export default function Navbar() {
     }
   }, [session?.user?.id])
 
-  const resetUserState = () => {
+  function resetUserState() {
     setUserRole(null)
     setUserAvatar(null)
     setUserName('')
@@ -340,6 +576,7 @@ export default function Navbar() {
     setNotifCount(0)
     setAdminNotifCount(0)
     setNotifications([])
+    setAdminNotifications([])
   }
 
   // Close dropdowns on outside click
@@ -351,19 +588,13 @@ export default function Navbar() {
       if (notifMenuRef.current && !notifMenuRef.current.contains(event.target as Node)) {
         setShowNotifications(false)
       }
+      if (adminNotifMenuRef.current && !adminNotifMenuRef.current.contains(event.target as Node)) {
+        setShowAdminNotifications(false)
+      }
     }
     document.addEventListener('mousedown', handleClickOutside)
     return () => document.removeEventListener('mousedown', handleClickOutside)
   }, [])
-
-  const handleSearch = (e: React.FormEvent) => {
-    e.preventDefault()
-    if (searchTerm.trim()) {
-      router.push(`/products?search=${encodeURIComponent(searchTerm)}`)
-      setSearchTerm('')
-      setMobileMenuOpen(false)
-    }
-  }
 
   const handleLogout = async () => {
     try {
@@ -383,6 +614,7 @@ export default function Navbar() {
       resetUserState()
       setShowUserMenu(false)
       setShowNotifications(false)
+      setShowAdminNotifications(false)
       setMobileMenuOpen(false)
 
       router.push('/')
@@ -403,10 +635,23 @@ export default function Navbar() {
     action()
   }
 
-  // Don't show navbar on auth pages
+  const getAdminNotificationIcon = (type: AdminNotification['type']) => {
+    switch (type) {
+      case 'low_stock':
+        return <AlertTriangle className="h-4 w-4 text-yellow-400" />
+      case 'new_order':
+        return <Package className="h-4 w-4 text-green-400" />
+      case 'pending_refund':
+        return <CreditCard className="h-4 w-4 text-red-400" />
+      case 'pending_review':
+        return <Star className="h-4 w-4 text-purple-400" />
+      default:
+        return <Bell className="h-4 w-4 text-gray-400" />
+    }
+  }
+
   if (isAuthPage) return null
 
-  // Show loading state
   if (isLoading) {
     return (
       <>
@@ -429,41 +674,42 @@ export default function Navbar() {
     )
   }
 
-  // Admin navigation items
   const adminNavItems = [
     { name: 'Dashboard', href: '/admin/dashboard', icon: LayoutDashboard },
     { name: 'Users', href: '/admin/users', icon: Users },
     { name: 'Products', href: '/admin/products', icon: ShoppingBag },
     { name: 'Orders', href: '/admin/orders', icon: Package },
     { name: 'Payments', href: '/admin/payments', icon: CreditCard },
+    { name: 'Refunds', href: '/admin/refunds', icon: RefreshCw },
     { name: 'Reviews', href: '/admin/reviews', icon: Star },
     { name: 'Categories', href: '/admin/categories', icon: Tags },
     { name: 'Vouchers', href: '/admin/vouchers', icon: Gift },
     { name: 'Shipping', href: '/admin/shipping', icon: Truck },
     { name: 'Settings', href: '/admin/settings', icon: Settings },
   ]
+  const visibleAdminNavItems = adminNavItems.filter((item) => canAccessAdminPath(userRole, item.href))
 
-  // ===================== SHOW ADMIN NAVBAR IF ON ADMIN ROUTE =====================
+  // ===================== SHOW ADMIN/STAFF NAVBAR =====================
   if (isOnAdminRoute) {
-    if (!isAdmin) {
-      return null
-    }
+    if (!isStaff) return null
     
     return (
       <>
         <nav className="fixed top-0 left-0 z-50 w-full bg-black border-b border-yellow-500/20 shadow-xl">
           <div className="max-w-7xl mx-auto px-4 sm:px-6 py-2">
             <div className="flex items-center justify-between gap-4">
-              <Link href="/admin/dashboard" className="flex items-center gap-3 shrink-0 group">
+              <Link href={adminHomeHref} className="flex items-center gap-3 shrink-0 group">
                 <img src="/logo.png" alt="ROCARS" className="w-8 h-8 object-contain transition-transform group-hover:scale-105" />
                 <div className="hidden sm:block">
                   <h1 className="text-white font-bold text-sm tracking-wide">ROCARS</h1>
-                  <p className="text-[8px] text-yellow-400 uppercase tracking-[0.25em]">ADMIN PANEL</p>
+                  <p className="text-[8px] text-yellow-400 uppercase tracking-[0.25em]">
+                    {isAdmin ? 'ADMIN PANEL' : 'STAFF PANEL'}
+                  </p>
                 </div>
               </Link>
 
               <div className="hidden lg:flex items-center gap-1">
-                {adminNavItems.map((item) => {
+                {visibleAdminNavItems.map((item) => {
                   const isActive = pathname === item.href || pathname?.startsWith(item.href + '/')
                   return (
                     <Link
@@ -486,18 +732,111 @@ export default function Navbar() {
               </div>
 
               <div className="flex items-center gap-2">
-                <button
-                  onClick={() => router.push('/admin/notifications')}
-                  className="relative flex h-10 w-10 items-center justify-center rounded-lg border border-white/10 bg-white/5 hover:border-yellow-400 hover:bg-white/10 transition"
-                >
-                  <Bell className="h-4 w-4 text-gray-300" />
-                  {adminNotifCount > 0 && (
-                    <span className="absolute -right-1 -top-1 flex h-5 w-5 items-center justify-center rounded-full bg-red-500 text-[10px] font-bold text-white animate-pulse">
-                      {adminNotifCount > 9 ? '9+' : adminNotifCount}
-                    </span>
-                  )}
-                </button>
+                {/* Admin Notifications Dropdown */}
+                <div className="relative" ref={adminNotifMenuRef}>
+                  <button
+                    onClick={() => setShowAdminNotifications(!showAdminNotifications)}
+                    className="relative flex h-10 w-10 items-center justify-center rounded-lg border border-white/10 bg-white/5 hover:border-yellow-400 hover:bg-white/10 transition"
+                  >
+                    <Bell className="h-4 w-4 text-gray-300" />
+                    {adminNotifCount > 0 && (
+                      <span className="absolute -right-1 -top-1 flex h-5 w-5 items-center justify-center rounded-full bg-red-500 text-[10px] font-bold text-white animate-pulse">
+                        {adminNotifCount > 9 ? '9+' : adminNotifCount}
+                      </span>
+                    )}
+                  </button>
 
+                  {showAdminNotifications && (
+                    <div className="absolute right-0 mt-2 w-80 sm:w-96 origin-top-right rounded-xl border border-white/10 bg-black shadow-2xl z-50">
+                      <div className="p-4 border-b border-white/10">
+                        <div className="flex justify-between items-center">
+                          <h3 className="text-white font-semibold">System Alerts</h3>
+                          <div className="flex gap-2">
+                            {adminNotifCount > 0 && (
+                              <button
+                                onClick={markAllAdminNotificationsAsRead}
+                                className="text-xs text-yellow-400 hover:text-yellow-300 flex items-center gap-1"
+                              >
+                                <CheckCheck className="w-3 h-3" />
+                                Mark all read
+                              </button>
+                            )}
+                            {isAdmin && (
+                              <Link
+                                href="/admin/notifications"
+                                onClick={() => setShowAdminNotifications(false)}
+                                className="text-xs text-gray-400 hover:text-white"
+                              >
+                                View all
+                              </Link>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                      
+                      <div className="max-h-96 overflow-y-auto">
+                        {loadingAdminNotifs ? (
+                          <div className="p-8 text-center">
+                            <div className="animate-spin rounded-full h-6 w-6 border-2 border-yellow-400 border-t-transparent mx-auto"></div>
+                            <p className="text-xs text-gray-500 mt-2">Loading...</p>
+                          </div>
+                        ) : adminNotifications.length === 0 ? (
+                          <div className="p-8 text-center">
+                            <Bell className="w-8 h-8 text-gray-600 mx-auto mb-2" />
+                            <p className="text-sm text-gray-500">No system alerts</p>
+                            <p className="text-xs text-gray-600 mt-1">All systems operational</p>
+                          </div>
+                        ) : (
+                          adminNotifications.slice(0, 5).map((notif) => (
+                            <div
+                              key={notif.id}
+                              className={`p-4 border-b border-white/10 transition cursor-pointer ${
+                                !notif.is_read ? 'bg-white/5 hover:bg-white/10' : 'hover:bg-white/5'
+                              }`}
+                              onClick={() => handleAdminNotificationClick(notif)}
+                            >
+                              <div className="flex items-start gap-3">
+                                <div className="mt-0.5">
+                                  {getAdminNotificationIcon(notif.type)}
+                                </div>
+                                <div className="flex-1 min-w-0">
+                                  <p className="text-sm font-medium text-white">
+                                    {notif.title}
+                                  </p>
+                                  <p className="text-xs text-gray-400 mt-1 break-words line-clamp-2">
+                                    {notif.message}
+                                  </p>
+                                  <p className="text-xs text-gray-500 mt-2">
+                                    {new Date(notif.created_at).toLocaleDateString('en-PH', {
+                                      month: 'short',
+                                      day: 'numeric',
+                                      hour: '2-digit',
+                                      minute: '2-digit'
+                                    })}
+                                  </p>
+                                </div>
+                              </div>
+                            </div>
+                          ))
+                        )}
+                      </div>
+                      
+                      {isAdmin && adminNotifications.length > 5 && (
+                        <div className="p-3 border-t border-white/10">
+                          <Link
+                            href="/admin/notifications"
+                            onClick={() => setShowAdminNotifications(false)}
+                            className="block text-center text-xs text-yellow-400 hover:text-yellow-300"
+                          >
+                            View all {adminNotifications.length} notifications
+                          </Link>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+
+                {/* Admin/Staff User Menu */}
                 <div className="relative" ref={userMenuRef}>
                   <button
                     onClick={() => setShowUserMenu(!showUserMenu)}
@@ -518,28 +857,25 @@ export default function Navbar() {
                     <div className="absolute right-0 mt-2 w-64 origin-top-right rounded-xl border border-white/10 bg-black shadow-2xl z-50">
                       <div className="p-2">
                         <div className="border-b border-white/10 px-3 py-2 mb-2">
-                          <p className="text-xs text-gray-400">Admin Access</p>
+                          <p className="text-xs text-gray-400">
+                            {isAdmin ? 'Admin Access' : 'Staff Access'}
+                          </p>
                           <p className="text-sm font-medium text-white truncate">
                             {userName || session?.user?.email?.split('@')[0]}
                           </p>
-                          <p className="text-xs text-yellow-400 mt-1">Administrator</p>
+                          <p className="text-xs text-yellow-400 mt-1 capitalize">
+                            {isAdmin ? 'Administrator' : 'Staff Member'}
+                          </p>
                         </div>
 
-                        <Link href="/admin/dashboard" onClick={() => setShowUserMenu(false)} className="flex items-center gap-3 px-3 py-2.5 text-sm text-gray-300 hover:bg-white/10 hover:text-white rounded-lg transition">
-                          <LayoutDashboard className="h-4 w-4" /> Dashboard
-                        </Link>
+                        {isAdmin && (
+                          <Link href="/admin/staff" onClick={() => setShowUserMenu(false)} className="flex items-center gap-3 px-3 py-2.5 text-sm text-gray-300 hover:bg-white/10 hover:text-white rounded-lg transition">
+                            <UserCircle className="h-4 w-4" /> Staff Page
+                          </Link>
+                        )}
 
-                        <Link href="/admin/vouchers" onClick={() => setShowUserMenu(false)} className="flex items-center gap-3 px-3 py-2.5 text-sm text-gray-300 hover:bg-white/10 hover:text-white rounded-lg transition">
-                          <Gift className="h-4 w-4" /> Manage Vouchers
-                        </Link>
-
-                        <Link href="/admin/notifications" onClick={() => setShowUserMenu(false)} className="flex items-center gap-3 px-3 py-2.5 text-sm text-gray-300 hover:bg-white/10 hover:text-white rounded-lg transition">
-                          <Bell className="h-4 w-4" /> Notifications
-                          {adminNotifCount > 0 && (
-                            <span className="ml-auto bg-red-500 text-white text-xs px-2 py-0.5 rounded-full">
-                              {adminNotifCount}
-                            </span>
-                          )}
+                        <Link href={adminHomeHref} onClick={() => setShowUserMenu(false)} className="flex items-center gap-3 px-3 py-2.5 text-sm text-gray-300 hover:bg-white/10 hover:text-white rounded-lg transition">
+                          <LayoutDashboard className="h-4 w-4" /> {isAdmin ? 'Dashboard' : 'Staff Panel'}
                         </Link>
 
                         <Link href="/" onClick={() => setShowUserMenu(false)} className="flex items-center gap-3 px-3 py-2.5 text-sm text-gray-300 hover:bg-white/10 hover:text-white rounded-lg transition">
@@ -572,7 +908,7 @@ export default function Navbar() {
           {mobileMenuOpen && (
             <div className="lg:hidden border-t border-yellow-500/20 bg-black py-4 px-4 max-h-[80vh] overflow-y-auto">
               <div className="grid grid-cols-2 gap-2">
-                {adminNavItems.map((item) => (
+                {visibleAdminNavItems.map((item) => (
                   <Link
                     key={item.href}
                     href={item.href}
@@ -583,6 +919,16 @@ export default function Navbar() {
                     <span className="text-xs">{item.name}</span>
                   </Link>
                 ))}
+                {isAdmin && (
+                  <Link
+                    href="/admin/staff"
+                    onClick={() => setMobileMenuOpen(false)}
+                    className="flex flex-col items-center gap-2 p-3 text-gray-300 hover:bg-white/10 rounded-lg transition"
+                  >
+                    <UserCircle className="w-5 h-5" />
+                    <span className="text-xs">Staff Page</span>
+                  </Link>
+                )}
                 <Link
                   href="/"
                   onClick={() => setMobileMenuOpen(false)}
@@ -623,30 +969,18 @@ export default function Navbar() {
 
             <div className="hidden md:flex items-center gap-8 text-sm font-medium">
               <Link href="/" className="text-gray-300 hover:text-white transition-colors">Home</Link>
+              <Link href="/products" className="text-gray-300 hover:text-white transition-colors">Products</Link>
               <Link href="/support" className="text-gray-300 hover:text-white transition-colors">Support</Link>
               <Link href="/shipping" className="text-gray-300 hover:text-white transition-colors">Shipping</Link>
               <Link href="/about" className="text-gray-300 hover:text-white transition-colors">About</Link>
             </div>
 
-            <form onSubmit={handleSearch} className="flex-1 max-w-[320px]">
-              <div className="relative">
-                <input
-                  type="text"
-                  value={searchTerm}
-                  onChange={(e) => setSearchTerm(e.target.value)}
-                  placeholder="Search auto parts..."
-                  className="w-full h-11 rounded-xl border border-white/10 bg-white/10 pl-11 pr-4 text-sm text-white placeholder:text-gray-400 focus:border-yellow-400 focus:bg-black focus:outline-none transition"
-                />
-                <Search className="absolute left-4 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" />
-              </div>
-            </form>
-
             <div className="flex items-center gap-2">
-              {isAdmin && (
+              {isStaff && (
                 <Link
-                  href="/admin/dashboard"
+                  href={adminHomeHref}
                   className="relative flex h-11 w-11 items-center justify-center rounded-xl border border-yellow-400/30 bg-yellow-400/10 hover:bg-yellow-400/20 transition"
-                  title="Admin Dashboard"
+                  title={isAdmin ? "Admin Dashboard" : "Staff Panel"}
                 >
                   <LayoutDashboard className="h-5 w-5 text-yellow-400" />
                 </Link>
@@ -726,13 +1060,7 @@ export default function Navbar() {
                               className={`p-4 border-b border-white/10 hover:bg-white/5 transition cursor-pointer ${
                                 !notif.is_read ? 'bg-white/5' : ''
                               }`}
-                              onClick={() => {
-                                if (!notif.is_read) markAsRead(notif.id)
-                                if (notif.title === 'Order Status Updated') {
-                                  router.push('/orders')
-                                  setShowNotifications(false)
-                                }
-                              }}
+                              onClick={() => handleNotificationClick(notif)}
                             >
                               <div className="flex items-start gap-3">
                                 <div className={`w-2 h-2 rounded-full mt-2 ${!notif.is_read ? 'bg-yellow-400' : 'bg-gray-600'}`} />
@@ -810,8 +1138,10 @@ export default function Navbar() {
                           {userName || session.user.email?.split('@')[0]}
                         </p>
                         <p className="text-xs text-gray-400 mt-1">{session.user.email}</p>
-                        {isAdmin && (
-                          <p className="text-xs text-yellow-400 mt-1">Admin Account</p>
+                        {isStaff && (
+                          <p className="text-xs text-yellow-400 mt-1 capitalize">
+                            {isAdmin ? 'Admin Account' : 'Staff Account'}
+                          </p>
                         )}
                       </div>
 
@@ -831,17 +1161,21 @@ export default function Navbar() {
                         <Heart className="h-4 w-4" /> Wishlist
                       </Link>
 
-                      {/* FIXED: My Vouchers button - now links to /my-vouchers */}
                       <Link href="/my-vouchers" onClick={() => setShowUserMenu(false)} className="flex items-center gap-3 px-3 py-2.5 text-sm text-gray-300 hover:bg-white/10 hover:text-white rounded-lg transition">
                         <Ticket className="h-4 w-4" /> My Vouchers
                       </Link>
 
-                      {isAdmin && (
+                      {isStaff && (
                         <>
                           <div className="border-t border-white/10 my-2"></div>
-                          <Link href="/admin/dashboard" onClick={() => setShowUserMenu(false)} className="flex items-center gap-3 px-3 py-2.5 text-sm text-yellow-400 hover:bg-yellow-400/10 rounded-lg transition">
-                            <LayoutDashboard className="h-4 w-4" /> Admin Dashboard
+                          <Link href={adminHomeHref} onClick={() => setShowUserMenu(false)} className="flex items-center gap-3 px-3 py-2.5 text-sm text-yellow-400 hover:bg-yellow-400/10 rounded-lg transition">
+                            <LayoutDashboard className="h-4 w-4" /> {isAdmin ? 'Admin Dashboard' : 'Staff Panel'}
                           </Link>
+                          {isAdmin && (
+                            <Link href="/admin/staff" onClick={() => setShowUserMenu(false)} className="flex items-center gap-3 px-3 py-2.5 text-sm text-gray-300 hover:bg-white/10 rounded-lg transition">
+                              <UserCircle className="h-4 w-4" /> Staff Page
+                            </Link>
+                          )}
                         </>
                       )}
 
@@ -873,6 +1207,7 @@ export default function Navbar() {
           <div className="md:hidden border-t border-yellow-500/20 bg-black py-4 px-4">
             <div className="flex flex-col gap-2">
               <Link href="/" onClick={() => setMobileMenuOpen(false)} className="px-4 py-3 text-gray-300 hover:bg-white/10 rounded-lg">Home</Link>
+              <Link href="/products" onClick={() => setMobileMenuOpen(false)} className="px-4 py-3 text-gray-300 hover:bg-white/10 rounded-lg">Products</Link>
               <Link href="/support" onClick={() => setMobileMenuOpen(false)} className="px-4 py-3 text-gray-300 hover:bg-white/10 rounded-lg">Support</Link>
               <Link href="/shipping" onClick={() => setMobileMenuOpen(false)} className="px-4 py-3 text-gray-300 hover:bg-white/10 rounded-lg">Shipping</Link>
               <Link href="/about" onClick={() => setMobileMenuOpen(false)} className="px-4 py-3 text-gray-300 hover:bg-white/10 rounded-lg">About</Link>
@@ -882,10 +1217,14 @@ export default function Navbar() {
                   <Link href="/orders" onClick={() => setMobileMenuOpen(false)} className="px-4 py-3 text-gray-300 hover:bg-white/10 rounded-lg">Orders</Link>
                   <Link href="/reviews" onClick={() => setMobileMenuOpen(false)} className="px-4 py-3 text-gray-300 hover:bg-white/10 rounded-lg">Reviews</Link>
                   <Link href="/wishlist" onClick={() => setMobileMenuOpen(false)} className="px-4 py-3 text-gray-300 hover:bg-white/10 rounded-lg">Wishlist</Link>
-                  {/* FIXED: My Vouchers button in mobile menu */}
                   <Link href="/my-vouchers" onClick={() => setMobileMenuOpen(false)} className="px-4 py-3 text-gray-300 hover:bg-white/10 rounded-lg">My Vouchers</Link>
-                  {isAdmin && (
-                    <Link href="/admin/dashboard" onClick={() => setMobileMenuOpen(false)} className="px-4 py-3 text-yellow-400 hover:bg-yellow-400/10 rounded-lg">Admin Panel</Link>
+                  {isStaff && (
+                    <>
+                      <Link href={adminHomeHref} onClick={() => setMobileMenuOpen(false)} className="px-4 py-3 text-yellow-400 hover:bg-yellow-400/10 rounded-lg">{isAdmin ? 'Admin Panel' : 'Staff Panel'}</Link>
+                      {isAdmin && (
+                        <Link href="/admin/staff" onClick={() => setMobileMenuOpen(false)} className="px-4 py-3 text-yellow-400 hover:bg-yellow-400/10 rounded-lg">Staff Page</Link>
+                      )}
+                    </>
                   )}
                   <button onClick={handleLogout} className="px-4 py-3 text-red-400 hover:bg-red-500/10 rounded-lg text-left">Sign Out</button>
                 </>

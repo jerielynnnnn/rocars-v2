@@ -3,7 +3,6 @@
 import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { supabase } from '@/lib/supabase'
-import Link from 'next/link'
 import PageContainer from '@/components/layout/PageContainer'
 import PageSection from '@/components/layout/PageSection'
 import { 
@@ -23,8 +22,8 @@ import {
   AlertCircle,
   Users,
   Gift,
-  Filter,
-  ChevronDown,
+  Sparkles,
+  ArrowLeft,
 } from 'lucide-react'
 
 type Voucher = {
@@ -223,37 +222,48 @@ export default function AdminVouchersPage() {
     setShowModal(true)
   }
 
-  const getTypeIcon = (type: string) => {
+  const getVoucherIcon = (type: string) => {
     switch (type) {
       case 'percentage':
-        return <Percent className="h-4 w-4" />
+        return <Percent className="h-5 w-5" />
       case 'free_shipping':
-        return <Truck className="h-4 w-4" />
+        return <Truck className="h-5 w-5" />
       default:
-        return <DollarSign className="h-4 w-4" />
+        return <Tag className="h-5 w-5" />
     }
   }
 
-  const getTypeColor = (type: string) => {
+  const getVoucherBadge = (type: string, value: number) => {
     switch (type) {
       case 'percentage':
-        return 'from-purple-500 to-pink-500'
+        return `${value}% OFF`
+      case 'fixed':
+        return `₱${value.toLocaleString()} OFF`
       case 'free_shipping':
-        return 'from-blue-500 to-cyan-500'
+        return 'FREE SHIPPING'
       default:
-        return 'from-green-500 to-emerald-500'
+        return 'DISCOUNT'
     }
   }
 
-  const getTypeLabel = (type: string) => {
-    switch (type) {
-      case 'percentage':
-        return 'Percentage'
-      case 'free_shipping':
-        return 'Free Shipping'
-      default:
-        return 'Fixed Amount'
-    }
+  const getStatusColor = (voucher: Voucher) => {
+    const now = new Date()
+    const validUntil = new Date(voucher.valid_until)
+    const isValid = now <= validUntil && voucher.is_active
+    
+    if (!voucher.is_active) return 'bg-gray-100 text-gray-600'
+    if (!isValid) return 'bg-red-100 text-red-600'
+    return 'bg-green-100 text-green-600'
+  }
+
+  const getStatusText = (voucher: Voucher) => {
+    const now = new Date()
+    const validUntil = new Date(voucher.valid_until)
+    const isValid = now <= validUntil && voucher.is_active
+    
+    if (!voucher.is_active) return 'Disabled'
+    if (!isValid) return 'Expired'
+    return 'Active'
   }
 
   const isVoucherValid = (voucher: Voucher) => {
@@ -263,31 +273,25 @@ export default function AdminVouchersPage() {
     return now >= validFrom && now <= validUntil && voucher.is_active
   }
 
-  const getStatusBadge = (voucher: Voucher) => {
-    const isValid = isVoucherValid(voucher)
-    
-    if (!voucher.is_active) {
-      return { text: 'Disabled', color: 'bg-gray-100 text-gray-600' }
-    }
-    if (!isValid) {
-      return { text: 'Expired', color: 'bg-red-100 text-red-600' }
-    }
-    return { text: 'Active', color: 'bg-green-100 text-green-600' }
-  }
+  const formatPrice = (price: number) =>
+    new Intl.NumberFormat('en-PH', {
+      style: 'currency',
+      currency: 'PHP',
+      minimumFractionDigits: 0,
+      maximumFractionDigits: 0,
+    }).format(price)
 
   const filteredVouchers = vouchers.filter(voucher => {
-    // Search filter
     const matchesSearch = voucher.code.toLowerCase().includes(searchTerm.toLowerCase()) ||
       voucher.description?.toLowerCase().includes(searchTerm.toLowerCase())
     
     if (!matchesSearch) return false
 
-    // Status filter
     if (filterType === 'active') {
-      return isVoucherValid(voucher) && voucher.is_active
+      return isVoucherValid(voucher)
     }
     if (filterType === 'expired') {
-      return !isVoucherValid(voucher) || !voucher.is_active
+      return !isVoucherValid(voucher)
     }
     
     return true
@@ -308,13 +312,17 @@ export default function AdminVouchersPage() {
         <div className="mb-8">
           <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
             <div>
-              <div className="flex items-center gap-2 mb-2">
-                <Gift className="h-6 w-6 text-yellow-500" />
-                <h1 className="text-3xl font-bold text-gray-900">Vouchers</h1>
+              <div className="flex items-center gap-3 mb-2">
+                <div className="p-3 rounded-2xl bg-yellow-100">
+                  <Gift className="h-6 w-6 text-yellow-600" />
+                </div>
+                <div>
+                  <h1 className="text-3xl font-bold text-gray-900">Vouchers</h1>
+                  <p className="text-sm text-gray-500 mt-1">
+                    Create and manage discount vouchers for customers
+                  </p>
+                </div>
               </div>
-              <p className="text-gray-500">
-                Create and manage discount vouchers for customers
-              </p>
             </div>
             <button
               onClick={() => {
@@ -348,7 +356,7 @@ export default function AdminVouchersPage() {
               <div>
                 <p className="text-sm text-gray-500">Active</p>
                 <p className="text-3xl font-bold text-green-600">
-                  {vouchers.filter(v => v.is_active && isVoucherValid(v)).length}
+                  {vouchers.filter(v => isVoucherValid(v)).length}
                 </p>
               </div>
               <div className="h-12 w-12 rounded-full bg-green-100 flex items-center justify-center">
@@ -362,7 +370,7 @@ export default function AdminVouchersPage() {
               <div>
                 <p className="text-sm text-gray-500">Expired/Disabled</p>
                 <p className="text-3xl font-bold text-red-600">
-                  {vouchers.filter(v => !isVoucherValid(v) || !v.is_active).length}
+                  {vouchers.filter(v => !isVoucherValid(v)).length}
                 </p>
               </div>
               <div className="h-12 w-12 rounded-full bg-red-100 flex items-center justify-center">
@@ -433,120 +441,116 @@ export default function AdminVouchersPage() {
           </div>
         </div>
 
-        {/* Vouchers Grid */}
+        {/* Vouchers Grid - Matching User End Style */}
         {filteredVouchers.length === 0 ? (
-          <div className="bg-white rounded-2xl border border-gray-200 p-12 text-center">
-            <div className="h-20 w-20 rounded-full bg-gray-100 flex items-center justify-center mx-auto mb-4">
-              <Tag className="h-10 w-10 text-gray-400" />
+          <div className="bg-white rounded-3xl border border-gray-200 p-12 text-center">
+            <div className="w-20 h-20 rounded-full bg-gray-100 flex items-center justify-center mx-auto mb-4">
+              <Gift className="h-10 w-10 text-gray-400" />
             </div>
-            <h3 className="text-lg font-medium text-gray-900 mb-2">No vouchers found</h3>
-            <p className="text-gray-500">Create your first voucher to start offering discounts.</p>
+            <h3 className="text-lg font-semibold text-gray-900 mb-2">No Vouchers Found</h3>
+            <p className="text-gray-500 max-w-md mx-auto">
+              {searchTerm ? 'No vouchers match your search criteria.' : 'Create your first voucher to start offering discounts to customers!'}
+            </p>
+            {!searchTerm && (
+              <button
+                onClick={() => {
+                  resetForm()
+                  setShowModal(true)
+                }}
+                className="mt-6 px-6 py-3 bg-yellow-400 text-black rounded-xl font-medium hover:bg-yellow-500 transition"
+              >
+                Create Voucher
+              </button>
+            )}
           </div>
         ) : (
-          <div className="grid gap-5 md:grid-cols-2 lg:grid-cols-3">
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
             {filteredVouchers.map((voucher) => {
               const isValid = isVoucherValid(voucher)
-              const status = getStatusBadge(voucher)
+              const statusColor = getStatusColor(voucher)
+              const statusText = getStatusText(voucher)
               
               return (
                 <div
                   key={voucher.id}
-                  className="bg-white rounded-2xl border border-gray-200 shadow-sm hover:shadow-md transition-all duration-300 overflow-hidden"
+                  className={`relative overflow-hidden rounded-2xl border transition-all ${
+                    isValid
+                      ? 'bg-gradient-to-r from-yellow-50 to-white border-yellow-200 hover:shadow-md'
+                      : 'bg-gray-50 border-gray-200'
+                  }`}
                 >
-                  {/* Gradient Header */}
-                  <div className={`bg-gradient-to-r ${getTypeColor(voucher.type)} p-4`}>
-                    <div className="flex items-start justify-between">
-                      <div className="flex items-center gap-2">
-                        <div className="p-2 rounded-xl bg-white/20 backdrop-blur-sm">
-                          {getTypeIcon(voucher.type)}
-                        </div>
-                        <div>
-                          <h3 className="font-bold text-white text-lg">{voucher.code}</h3>
-                          <p className="text-xs text-white/80">{getTypeLabel(voucher.type)}</p>
-                        </div>
-                      </div>
-                      <button
-                        onClick={() => handleToggleStatus(voucher)}
-                        className={`px-2.5 py-1 rounded-full text-xs font-medium ${status.color}`}
-                      >
-                        {status.text}
-                      </button>
-                    </div>
+                  {/* Decorative Sparkles */}
+                  <div className="absolute top-0 right-0">
+                    <Sparkles className={`h-20 w-20 opacity-30 -rotate-12 ${
+                      isValid ? 'text-yellow-300' : 'text-gray-400'
+                    }`} />
                   </div>
 
-                  {/* Content */}
-                  <div className="p-5 space-y-3">
-                    {/* Discount Display */}
-                    <div className="bg-gray-50 rounded-xl p-3">
-                      {voucher.type === 'fixed' && (
-                        <div className="flex items-center justify-between">
-                          <span className="text-sm text-gray-500">Discount Amount</span>
-                          <span className="text-xl font-bold text-green-600">
-                            ₱{voucher.value.toLocaleString()}
-                          </span>
-                        </div>
+                  <div className="p-5">
+                    {/* Status Badge */}
+                    <div className="flex justify-end mb-2">
+                      <button
+                        onClick={() => handleToggleStatus(voucher)}
+                        className={`text-xs font-medium px-2 py-1 rounded-full ${statusColor}`}
+                      >
+                        {statusText}
+                      </button>
+                    </div>
+
+                    <div className="flex items-center gap-3 mb-3">
+                      <div className={`p-2 rounded-xl ${isValid ? 'bg-yellow-100' : 'bg-gray-200'}`}>
+                        {getVoucherIcon(voucher.type)}
+                      </div>
+                      <div>
+                        <span className={`text-xs font-semibold px-2 py-0.5 rounded-full ${
+                          isValid ? 'bg-yellow-100 text-yellow-700' : 'bg-gray-200 text-gray-600'
+                        }`}>
+                          {getVoucherBadge(voucher.type, voucher.value)}
+                        </span>
+                        <p className="text-xs text-gray-400 mt-1 font-mono">
+                          Code: {voucher.code}
+                        </p>
+                      </div>
+                    </div>
+
+                    <h3 className="font-bold text-black text-lg">
+                      {voucher.type === 'percentage' && `${voucher.value}% OFF`}
+                      {voucher.type === 'fixed' && `${formatPrice(voucher.value)} OFF`}
+                      {voucher.type === 'free_shipping' && 'Free Shipping'}
+                    </h3>
+
+                    {voucher.description && (
+                      <p className="text-sm text-gray-500 mt-1">{voucher.description}</p>
+                    )}
+
+                    <div className="flex flex-wrap items-center gap-3 mt-3 text-xs text-gray-400">
+                      {voucher.min_spend > 0 && (
+                        <span>Min. Spend {formatPrice(voucher.min_spend)}</span>
                       )}
-                      {voucher.type === 'percentage' && (
-                        <div className="flex items-center justify-between">
-                          <span className="text-sm text-gray-500">Discount</span>
-                          <span className="text-xl font-bold text-purple-600">
-                            {voucher.value}% OFF
-                          </span>
-                        </div>
+                      {voucher.max_discount && voucher.type === 'percentage' && (
+                        <span>Max {formatPrice(voucher.max_discount)}</span>
                       )}
-                      {voucher.type === 'free_shipping' && (
-                        <div className="flex items-center justify-between">
-                          <span className="text-sm text-gray-500">Benefit</span>
-                          <span className="text-xl font-bold text-blue-600">
-                            Free Shipping
-                          </span>
-                        </div>
+                      {voucher.usage_limit && (
+                        <span>Limit: {voucher.used_count}/{voucher.usage_limit}</span>
                       )}
                     </div>
 
-                    {/* Details Grid */}
-                    <div className="space-y-2">
-                      <div className="flex items-center justify-between text-sm">
-                        <span className="text-gray-500">Min. Spend</span>
-                        <span className="font-medium text-gray-900">
-                          ₱{voucher.min_spend.toLocaleString()}
-                        </span>
-                      </div>
-
-                      {voucher.max_discount && (
-                        <div className="flex items-center justify-between text-sm">
-                          <span className="text-gray-500">Max Discount</span>
-                          <span className="font-medium text-gray-900">
-                            ₱{voucher.max_discount.toLocaleString()}
-                          </span>
-                        </div>
-                      )}
-
-                      <div className="flex items-center justify-between text-sm">
-                        <span className="text-gray-500">Usage</span>
-                        <span className="font-medium text-gray-900">
-                          {voucher.used_count} / {voucher.usage_limit || '∞'}
-                        </span>
-                      </div>
-
-                      <div className="flex items-center gap-2 text-xs text-gray-500 pt-2">
-                        <Calendar className="h-3 w-3" />
+                    <div className="flex items-center gap-4 mt-3 pt-3 border-t border-gray-100">
+                      <div className="flex items-center gap-1 text-xs text-gray-400">
+                        <Clock className="h-3 w-3" />
                         <span>
-                          {new Date(voucher.valid_from).toLocaleDateString()} - {new Date(voucher.valid_until).toLocaleDateString()}
+                          {!isValid ? 'Expired: ' : 'Valid until: '}
+                          {new Date(voucher.valid_until).toLocaleDateString('en-PH', {
+                            year: 'numeric',
+                            month: 'short',
+                            day: 'numeric',
+                          })}
                         </span>
                       </div>
-
-                      {voucher.description && (
-                        <div className="pt-2 border-t border-gray-100">
-                          <p className="text-xs text-gray-500 leading-relaxed">
-                            {voucher.description}
-                          </p>
-                        </div>
-                      )}
                     </div>
 
                     {/* Action Buttons */}
-                    <div className="flex gap-2 pt-3 border-t border-gray-100">
+                    <div className="flex gap-2 mt-4">
                       <button
                         onClick={() => editVoucher(voucher)}
                         className="flex-1 inline-flex items-center justify-center gap-2 px-3 py-2 rounded-xl bg-gray-100 text-gray-700 hover:bg-gray-200 transition text-sm font-medium"
@@ -570,14 +574,19 @@ export default function AdminVouchersPage() {
         )}
       </PageContainer>
 
-      {/* Modal - Same styling */}
+      {/* Create/Edit Modal */}
       {showModal && (
         <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4 overflow-y-auto">
           <div className="bg-white rounded-2xl max-w-2xl w-full max-h-[90vh] overflow-y-auto">
             <div className="sticky top-0 bg-white border-b border-gray-200 p-5 flex justify-between items-center">
-              <h2 className="text-xl font-bold">
-                {editingVoucher ? 'Edit Voucher' : 'Create Voucher'}
-              </h2>
+              <div className="flex items-center gap-2">
+                <div className="p-2 rounded-xl bg-yellow-100">
+                  <Gift className="h-5 w-5 text-yellow-600" />
+                </div>
+                <h2 className="text-xl font-bold">
+                  {editingVoucher ? 'Edit Voucher' : 'Create New Voucher'}
+                </h2>
+              </div>
               <button
                 onClick={() => {
                   setShowModal(false)
@@ -734,7 +743,7 @@ export default function AdminVouchersPage() {
                   className="rounded border-gray-300 text-yellow-500 focus:ring-yellow-400"
                 />
                 <label htmlFor="is_active" className="text-sm text-gray-700">
-                  Active (immediately available for use)
+                  Active (immediately available for customers)
                 </label>
               </div>
 

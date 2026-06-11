@@ -2,7 +2,7 @@
 'use client'
 
 import Link from 'next/link'
-import { Car, MapPin, Phone, Mail } from 'lucide-react'
+import { Car, MapPin, Phone, Mail, } from 'lucide-react'
 
 export default function Footer() {
   const currentYear = new Date().getFullYear()
@@ -19,11 +19,12 @@ export default function Footer() {
             </div>
             <p className="text-gray-400 text-sm">
               Premium automotive parts marketplace built for speed, quality, and performance.
+              Your trusted partner for quality auto parts in the Philippines since 2020.
             </p>
             <div className="flex gap-4 mt-4">
               {/* Facebook */}
               <a 
-                href="https://facebook.com" 
+                href="https://facebook.com/rocars" 
                 target="_blank" 
                 rel="noopener noreferrer"
                 className="text-gray-400 hover:text-yellow-400 transition"
@@ -36,7 +37,7 @@ export default function Footer() {
               
               {/* Twitter/X */}
               <a 
-                href="https://twitter.com" 
+                href="https://twitter.com/rocars" 
                 target="_blank" 
                 rel="noopener noreferrer"
                 className="text-gray-400 hover:text-yellow-400 transition"
@@ -49,7 +50,7 @@ export default function Footer() {
               
               {/* Instagram */}
               <a 
-                href="https://instagram.com" 
+                href="https://instagram.com/rocars" 
                 target="_blank" 
                 rel="noopener noreferrer"
                 className="text-gray-400 hover:text-yellow-400 transition"
@@ -62,7 +63,7 @@ export default function Footer() {
               
               {/* YouTube */}
               <a 
-                href="https://youtube.com" 
+                href="https://youtube.com/@rocars" 
                 target="_blank" 
                 rel="noopener noreferrer"
                 className="text-gray-400 hover:text-yellow-400 transition"
@@ -99,6 +100,11 @@ export default function Footer() {
                   Orders
                 </Link>
               </li>
+              <li>
+                <Link href="/support" className="text-gray-400 hover:text-yellow-400 transition">
+                  Support
+                </Link>
+              </li>
             </ul>
           </div>
 
@@ -117,7 +123,7 @@ export default function Footer() {
                 </Link>
               </li>
               <li>
-                <Link href="/faq" className="text-gray-400 hover:text-yellow-400 transition">
+                <Link href="/support" className="text-gray-400 hover:text-yellow-400 transition">
                   FAQ
                 </Link>
               </li>
@@ -127,40 +133,70 @@ export default function Footer() {
                 </Link>
               </li>
               <li>
-                <Link href="/returns" className="text-gray-400 hover:text-yellow-400 transition">
+                <Link href="/terms" className="text-gray-400 hover:text-yellow-400 transition">
                   Returns & Refunds
+                </Link>
+              </li>
+              <li>
+                <Link href="/privacy" className="text-gray-400 hover:text-yellow-400 transition">
+                  Privacy Policy
+                </Link>
+              </li>
+              <li>
+                <Link href="/terms" className="text-gray-400 hover:text-yellow-400 transition">
+                  Terms of Service
                 </Link>
               </li>
             </ul>
           </div>
 
-          {/* CONTACT INFO */}
+          {/* CONTACT INFO - Updated with actual ROCARS details */}
           <div>
             <h4 className="font-semibold mb-4 text-white">Contact Info</h4>
             <ul className="space-y-3 text-sm">
-              <li className="flex items-center gap-2 text-gray-400">
-                <MapPin className="w-4 h-4 shrink-0" />
-                <span>123 Auto Street, Manila, Philippines</span>
+              <li className="flex items-start gap-2 text-gray-400">
+                <MapPin className="w-4 h-4 shrink-0 mt-0.5" />
+                <span>Salawag, Dasmariñas, Cavite, Philippines 4114</span>
               </li>
               <li className="flex items-center gap-2 text-gray-400">
                 <Phone className="w-4 h-4 shrink-0" />
-                <a href="tel:+63212345678" className="hover:text-yellow-400 transition">
-                  +63 2 1234 5678
+                <a href="tel:+639171359278" className="hover:text-yellow-400 transition">
+                  0917-135-9278
+                </a>
+              </li>
+              <li className="flex items-center gap-2 text-gray-400">
+                <Phone className="w-4 h-4 shrink-0" />
+                <a href="tel:+639171046171" className="hover:text-yellow-400 transition">
+                  0917-104-6171
+                </a>
+              </li>
+              <li className="flex items-center gap-2 text-gray-400">
+                <Phone className="w-4 h-4 shrink-0" />
+                <a href="tel:+639171027174" className="hover:text-yellow-400 transition">
+                  0917-102-7174
                 </a>
               </li>
               <li className="flex items-center gap-2 text-gray-400">
                 <Mail className="w-4 h-4 shrink-0" />
-                <a href="mailto:support@rocars.com" className="hover:text-yellow-400 transition">
-                  support@rocars.com
+                <a href="mailto:rocars.tire.trading@gmail.com" className="hover:text-yellow-400 transition">
+                  rocars.tire.trading@gmail.com
                 </a>
               </li>
             </ul>
+            
+            {/* Business Hours */}
+            <div className="mt-4 pt-4 border-t border-gray-800">
+              <h5 className="text-sm font-semibold text-white mb-2">Business Hours</h5>
+              <p className="text-xs text-gray-400">Monday - Saturday: 9:00 AM - 6:00 PM</p>
+              <p className="text-xs text-gray-400">Sunday: Closed</p>
+            </div>
           </div>
         </div>
 
         {/* BOTTOM BAR */}
         <div className="border-t border-gray-800 mt-8 pt-8 text-center text-sm text-gray-500">
-          <p>&copy; {currentYear} ROCARS. All rights reserved.</p>
+          <p>&copy; {currentYear} ROCARS Tire Trading. All rights reserved.</p>
+          <p className="text-xs mt-1">Your trusted auto parts supplier in Cavite and Batangas</p>
         </div>
       </div>
     </footer>

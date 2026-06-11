@@ -6,7 +6,6 @@ import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { useCart } from '@/context/CartContext'
 import { supabase } from '@/lib/supabase'
-import { useVoucher } from '@/hooks/useVoucher'
 import { 
   Minus, 
   Plus, 
@@ -21,13 +20,6 @@ import {
   Edit2,
   CheckSquare,
   Square,
-  Sparkles,
-  CheckCircle,
-  Gift,
-  Percent,
-  Wallet,
-  XCircle,
-  Loader2
 } from 'lucide-react'
 
 // Coordinates for Bacoor (origin)
@@ -145,27 +137,6 @@ interface Address {
   is_default: boolean
 }
 
-interface UserVoucher {
-  id: number
-  voucher_id: number
-  voucher_code: string
-  discount_amount: number
-  free_shipping: boolean
-  applied_at: string
-  order_id: number | null
-  vouchers?: {
-    id: number
-    code: string
-    type: 'fixed' | 'percentage' | 'free_shipping'
-    value: number
-    min_spend: number
-    max_discount: number | null
-    description: string | null
-    valid_until: string
-    used_count?: number
-  }
-}
-
 export default function CartPage() {
   const router = useRouter()
   const { cartItems, updateQuantity, removeFromCart, clearCart } = useCart()
@@ -174,14 +145,10 @@ export default function CartPage() {
   const [addresses, setAddresses] = useState<Address[]>([])
   const [selectedAddress, setSelectedAddress] = useState<Address | null>(null)
   const [showAddressModal, setShowAddressModal] = useState(false)
-  const [showVoucherModal, setShowVoucherModal] = useState(false)
   const [shippingFee, setShippingFee] = useState(0)
   const [distance, setDistance] = useState(0)
-  const [userId, setUserId] = useState<string | null>(null)
   const [selectedItems, setSelectedItems] = useState<Set<number>>(new Set())
   const [selectAll, setSelectAll] = useState(true)
-  const [userVouchers, setUserVouchers] = useState<UserVoucher[]>([])
-  const [loadingVouchers, setLoadingVouchers] = useState(false)
 
   // Remove duplicate items
   const uniqueCartItems = cartItems.reduce((acc, current) => {
@@ -199,20 +166,8 @@ export default function CartPage() {
     .filter(item => selectedItems.has(item.id))
     .reduce((sum, item) => sum + item.price * item.quantity, 0)
 
-  // Use the voucher hook
-  const {
-    voucherCode,
-    setVoucherCode,
-    appliedVoucher,
-    discount,
-    freeShipping,
-    error: voucherError,
-    loading: voucherLoading,
-    applyVoucher,
-    removeVoucher,
-    finalShippingFee,
-    total: totalWithDiscount,
-  } = useVoucher(subtotal, shippingFee)
+  // Total with shipping (no voucher here - will be handled in checkout)
+  const total = subtotal + shippingFee
 
   // Initialize selected items
   useEffect(() => {
@@ -226,18 +181,9 @@ export default function CartPage() {
     loadAddresses()
   }, [])
 
-  useEffect(() => {
-    if (isLoggedIn && userId) {
-      fetchUserVouchers()
-    }
-  }, [isLoggedIn, userId, subtotal])
-
   const checkAuth = async () => {
     const { data: { session } } = await supabase.auth.getSession()
     setIsLoggedIn(!!session)
-    if (session?.user) {
-      setUserId(session.user.id)
-    }
     setLoading(false)
   }
 
@@ -261,37 +207,6 @@ export default function CartPage() {
         setSelectedAddress(data[0])
         calculateShippingFromAddress(data[0])
       }
-    }
-  }
-
-  const fetchUserVouchers = async () => {
-    if (!userId) return
-    setLoadingVouchers(true)
-    try {
-      const { data, error } = await supabase
-        .from('voucher_usage')
-        .select(`
-          *,
-          vouchers (*)
-        `)
-        .eq('user_id', userId)
-        .is('order_id', null)
-        .order('applied_at', { ascending: false })
-
-      if (error) throw error
-
-      const now = new Date()
-      const validVouchers = (data || []).filter((v: any) => {
-        if (!v.vouchers) return false
-        const validUntil = new Date(v.vouchers.valid_until)
-        return validUntil > now
-      })
-
-      setUserVouchers(validVouchers)
-    } catch (error) {
-      console.error('Error fetching user vouchers:', error)
-    } finally {
-      setLoadingVouchers(false)
     }
   }
 
@@ -362,70 +277,6 @@ export default function CartPage() {
     }
   }
 
-  const handleApplyVoucher = async () => {
-    if (!voucherCode.trim()) {
-      alert('Please enter a voucher code')
-      return
-    }
-    const success = await applyVoucher(voucherCode)
-    if (!success && voucherError) {
-      alert(voucherError)
-    } else if (success) {
-      setShowVoucherModal(false)
-    }
-  }
-
-  const handleApplyUserVoucher = async (userVoucher: UserVoucher) => {
-    if (!userVoucher.vouchers) return
-    
-    const voucher = userVoucher.vouchers
-    
-    const now = new Date()
-    const validUntil = new Date(voucher.valid_until)
-    if (validUntil < now) {
-      alert('This voucher has expired')
-      await fetchUserVouchers()
-      return
-    }
-
-    if (voucher.min_spend > 0 && subtotal < voucher.min_spend) {
-      alert(`Minimum spend of ${formatPrice(voucher.min_spend)} required for this voucher`)
-      return
-    }
-
-    const success = await applyVoucher(voucher.code)
-    if (success) {
-      setShowVoucherModal(false)
-    } else {
-      alert(voucherError || 'Failed to apply voucher')
-    }
-  }
-
-  const getVoucherDisplay = (voucher: any) => {
-    if (!voucher) return ''
-    switch (voucher.type) {
-      case 'percentage':
-        return `${voucher.value}% OFF`
-      case 'fixed':
-        return `₱${voucher.value.toLocaleString()} OFF`
-      case 'free_shipping':
-        return 'Free Shipping'
-      default:
-        return 'Discount'
-    }
-  }
-
-  const getVoucherIcon = (type: string) => {
-    switch (type) {
-      case 'percentage':
-        return <Percent className="h-4 w-4" />
-      case 'free_shipping':
-        return <Truck className="h-4 w-4" />
-      default:
-        return <Gift className="h-4 w-4" />
-    }
-  }
-
   const handleProceedToCheckout = () => {
     if (!isLoggedIn) {
       router.push('/login')
@@ -446,13 +297,9 @@ export default function CartPage() {
     const checkoutData = {
       items: itemsToCheckout,
       subtotal: subtotal,
-      shippingFee: finalShippingFee,
-      voucherDiscount: discount,
-      freeShipping: freeShipping,
-      appliedVoucher: appliedVoucher,
+      shippingFee: shippingFee,
       address: selectedAddress,
       distance: distance,
-      total: totalWithDiscount,
     }
     localStorage.setItem('checkoutSummary', JSON.stringify(checkoutData))
     
@@ -682,21 +529,14 @@ export default function CartPage() {
                     </div>
                     <div className="mt-2 flex items-center gap-2 text-xs text-gray-500">
                       <Truck className="h-3 w-3" />
-                      <span>{distance} km from Bacoor • {freeShipping ? 'Free Shipping' : formatPrice(shippingFee)}</span>
+                      <span>{distance} km from Bacoor • {formatPrice(shippingFee)}</span>
                     </div>
                   </div>
                 )}
 
-                {/* Order Summary Details */}
+                {/* Order Summary Details - No Voucher Section */}
                 <div className="flex justify-between items-center mb-4">
                   <h2 className="text-lg font-bold">Order Summary</h2>
-                  <button
-                    onClick={() => setShowVoucherModal(true)}
-                    className="flex items-center gap-1 text-sm text-yellow-600 hover:text-yellow-700"
-                  >
-                    <Gift className="h-4 w-4" />
-                    {appliedVoucher ? 'Change Voucher' : 'Add Voucher'}
-                  </button>
                 </div>
                 
                 <div className="space-y-3 text-sm">
@@ -709,15 +549,8 @@ export default function CartPage() {
                     <div className="flex justify-between">
                       <span className="text-gray-600">Shipping fee</span>
                       <span className="font-medium">
-                        {freeShipping ? formatPrice(0) : formatPrice(shippingFee)}
+                        {formatPrice(shippingFee)}
                       </span>
-                    </div>
-                  )}
-                  
-                  {discount > 0 && (
-                    <div className="flex justify-between text-green-600">
-                      <span>Voucher discount</span>
-                      <span>- {formatPrice(discount)}</span>
                     </div>
                   )}
                 </div>
@@ -727,29 +560,18 @@ export default function CartPage() {
                   <div className="flex justify-between items-center">
                     <span className="font-bold text-lg">Total</span>
                     <span className="font-bold text-2xl text-yellow-600">
-                      {formatPrice(totalWithDiscount)}
+                      {formatPrice(total)}
                     </span>
                   </div>
                   <p className="text-xs text-gray-500 mt-1">({selectedItems.size} items selected)</p>
                 </div>
 
-                {/* Applied Voucher Display */}
-                {appliedVoucher && (
-                  <div className="mt-4 p-3 bg-green-50 rounded-xl">
-                    <div className="flex justify-between items-center text-sm">
-                      <div className="flex items-center gap-2">
-                        {getVoucherIcon(appliedVoucher.type)}
-                        <span className="font-medium text-green-700">Voucher Applied</span>
-                      </div>
-                      <button onClick={removeVoucher} className="text-xs text-red-500 hover:text-red-600">
-                        Remove
-                      </button>
-                    </div>
-                    <p className="text-xs text-green-600 mt-1">
-                      {getVoucherDisplay(appliedVoucher)} applied successfully!
-                    </p>
-                  </div>
-                )}
+                {/* Note about vouchers */}
+                <div className="mt-4 p-3 bg-blue-50 rounded-lg">
+                  <p className="text-xs text-blue-600 text-center">
+                    💡 Vouchers and discounts can be applied at checkout
+                  </p>
+                </div>
 
                 {/* Checkout Button */}
                 {!isLoggedIn ? (
@@ -863,160 +685,6 @@ export default function CartPage() {
                     <PlusCircle className="h-4 w-4" />
                     Add New Address
                   </button>
-                </div>
-              )}
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Voucher Modal */}
-      {showVoucherModal && (
-        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
-          <div className="bg-white rounded-2xl w-full max-w-md overflow-hidden">
-            <div className="p-4 border-b border-gray-200 flex justify-between items-center">
-              <div className="flex items-center gap-2">
-                <Gift className="h-5 w-5 text-yellow-500" />
-                <h3 className="font-semibold">Apply Voucher</h3>
-              </div>
-              <button onClick={() => setShowVoucherModal(false)}>
-                <XCircle className="h-5 w-5 text-gray-400" />
-              </button>
-            </div>
-            
-            <div className="p-4">
-              {/* Manual Voucher Entry */}
-              <div className="mb-6">
-                <label className="block text-sm font-medium text-gray-700 mb-2">
-                  Enter Voucher Code
-                </label>
-                <div className="flex gap-2">
-                  <input
-                    value={voucherCode}
-                    onChange={(e) => setVoucherCode(e.target.value.toUpperCase())}
-                    placeholder="Enter code (e.g., SAVE10)"
-                    className="flex-1 border border-gray-300 rounded-xl px-4 py-2.5 text-sm outline-none focus:border-yellow-400"
-                    disabled={!!appliedVoucher}
-                  />
-                  {appliedVoucher ? (
-                    <button
-                      onClick={removeVoucher}
-                      className="bg-red-500 hover:bg-red-600 text-white px-4 rounded-xl font-medium"
-                    >
-                      Remove
-                    </button>
-                  ) : (
-                    <button
-                      onClick={handleApplyVoucher}
-                      disabled={voucherLoading}
-                      className="bg-yellow-400 hover:bg-yellow-500 text-black px-4 rounded-xl font-medium disabled:opacity-50"
-                    >
-                      {voucherLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Apply'}
-                    </button>
-                  )}
-                </div>
-                {voucherError && <p className="text-xs text-red-500 mt-2">{voucherError}</p>}
-              </div>
-
-              {/* My Vouchers Section */}
-              {userVouchers.length > 0 && (
-                <div>
-                  <div className="flex items-center gap-2 mb-3">
-                    <Wallet className="h-4 w-4 text-gray-500" />
-                    <h4 className="text-sm font-medium text-gray-700">My Vouchers</h4>
-                    <span className="text-xs text-gray-400">({userVouchers.length} available)</span>
-                  </div>
-                  
-                  <div className="space-y-3 max-h-80 overflow-y-auto">
-                    {userVouchers.map((userVoucher) => {
-                      const voucher = userVoucher.vouchers
-                      if (!voucher) return null
-                      
-                      const isExpired = new Date(voucher.valid_until) < new Date()
-                      const meetsMinSpend = voucher.min_spend === 0 || subtotal >= voucher.min_spend
-                      const isApplicable = !isExpired && meetsMinSpend
-                      
-                      return (
-                        <div
-                          key={userVoucher.id}
-                          className={`border rounded-xl p-3 transition ${
-                            appliedVoucher?.id === voucher.id
-                              ? 'border-green-400 bg-green-50'
-                              : isApplicable
-                              ? 'border-gray-200 hover:border-yellow-300 cursor-pointer'
-                              : 'border-gray-200 opacity-50'
-                          }`}
-                          onClick={() => isApplicable && handleApplyUserVoucher(userVoucher)}
-                        >
-                          <div className="flex justify-between items-start">
-                            <div className="flex-1">
-                              <div className="flex items-center gap-2 mb-1">
-                                <div className="p-1 rounded-lg bg-yellow-100">
-                                  {getVoucherIcon(voucher.type)}
-                                </div>
-                                <span className="text-xs font-bold text-yellow-700">
-                                  {getVoucherDisplay(voucher)}
-                                </span>
-                                {appliedVoucher?.id === voucher.id && (
-                                  <span className="text-xs bg-green-100 text-green-700 px-2 py-0.5 rounded-full">
-                                    Applied
-                                  </span>
-                                )}
-                              </div>
-                              
-                              <p className="text-xs text-gray-500">
-                                Code: <span className="font-mono">{voucher.code}</span>
-                              </p>
-                              
-                              {voucher.description && (
-                                <p className="text-xs text-gray-400 mt-1">{voucher.description}</p>
-                              )}
-                              
-                              <div className="flex flex-wrap gap-3 mt-2 text-xs text-gray-400">
-                                {voucher.min_spend > 0 && (
-                                  <span>Min. Spend {formatPrice(voucher.min_spend)}</span>
-                                )}
-                                {voucher.max_discount && voucher.type === 'percentage' && (
-                                  <span>Max {formatPrice(voucher.max_discount)}</span>
-                                )}
-                                <span>Expires: {new Date(voucher.valid_until).toLocaleDateString()}</span>
-                              </div>
-                              
-                              {!meetsMinSpend && (
-                                <p className="text-xs text-red-500 mt-1">
-                                  Need {formatPrice(voucher.min_spend - subtotal)} more to use this voucher
-                                </p>
-                              )}
-                            </div>
-                            
-                            {isApplicable && appliedVoucher?.id !== voucher.id && (
-                              <div className="ml-3">
-                                <button className="text-yellow-600 text-sm font-medium hover:text-yellow-700">
-                                  Apply
-                                </button>
-                              </div>
-                            )}
-                          </div>
-                        </div>
-                      )
-                    })}
-                  </div>
-                </div>
-              )}
-
-              {userVouchers.length === 0 && !loadingVouchers && (
-                <div className="text-center py-8">
-                  <Gift className="h-12 w-12 text-gray-300 mx-auto mb-3" />
-                  <p className="text-gray-500 text-sm">No vouchers available</p>
-                  <Link href="/vouchers" className="text-xs text-yellow-600 hover:underline mt-1 inline-block">
-                    Browse vouchers →
-                  </Link>
-                </div>
-              )}
-
-              {loadingVouchers && (
-                <div className="flex justify-center py-8">
-                  <Loader2 className="h-6 w-6 animate-spin text-gray-400" />
                 </div>
               )}
             </div>

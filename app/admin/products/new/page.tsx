@@ -3,6 +3,7 @@
 import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { supabase } from '@/lib/supabase';
+import { logAdminActivity } from '@/lib/admin-activity';
 import {
   ArrowLeft,
   Upload,
@@ -288,6 +289,13 @@ export default function NewProductPage() {
           alert(`Product created but images failed to upload: ${uploadError.message}\nYou can add images later by editing the product.`);
         }
       }
+
+      await logAdminActivity({
+        action: 'CREATE_PRODUCT',
+        target_type: 'product',
+        target_id: product.id,
+        details: { name: product.name, sku: product.sku },
+      });
 
       alert('Product created successfully!');
       router.push('/admin/products');

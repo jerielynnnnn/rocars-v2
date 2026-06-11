@@ -1,7 +1,8 @@
-// middleware.ts  (in the root of your project)
+// middleware.ts (in the root of your project)
 import { createServerClient } from '@supabase/ssr'
 import { NextResponse } from 'next/server'
 import type { NextRequest } from 'next/server'
+import { canAccessAdminPath, isAdminLikeRole } from '@/lib/admin-role'
 
 export async function middleware(req: NextRequest) {
   const res = NextResponse.next()
@@ -45,8 +46,12 @@ export async function middleware(req: NextRequest) {
       .eq('id', session.user.id)
       .single()
 
-    if (profile?.role !== 'admin') {
+    if (!isAdminLikeRole(profile?.role)) {
       return NextResponse.redirect(new URL('/', req.url))
+    }
+
+    if (!canAccessAdminPath(profile?.role, req.nextUrl.pathname)) {
+      return NextResponse.redirect(new URL('/admin/dashboard', req.url))
     }
   }
 
@@ -58,7 +63,7 @@ export async function middleware(req: NextRequest) {
       .eq('id', session.user.id)
       .single()
 
-    if (profile?.role === 'admin') {
+    if (isAdminLikeRole(profile?.role)) {
       return NextResponse.redirect(new URL('/admin/dashboard', req.url))
     }
   }

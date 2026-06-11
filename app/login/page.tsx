@@ -4,6 +4,7 @@ import { useState, useEffect } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { supabase } from '@/lib/supabase'
 import Image from 'next/image'
+import type { AuthError, User } from '@supabase/supabase-js'
 import {
   Eye,
   EyeOff,
@@ -12,9 +13,9 @@ import {
   Loader2,
   AlertCircle,
   Check,
-  X,
 } from 'lucide-react'
 import { FaGoogle } from 'react-icons/fa'
+import { isAdminLikeRole } from '@/lib/admin-role'
 
 export default function LoginPage() {
   const router = useRouter()
@@ -37,14 +38,18 @@ export default function LoginPage() {
   const [error, setError] = useState('')
   const [successMessage, setSuccessMessage] = useState('')
   const [requires2FA, setRequires2FA] = useState(false)
-  const [focusedField, setFocusedField] = useState<string | null>(null)
-  const [userId, setUserId] = useState<string | null>(null)
+  const [pendingUser, setPendingUser] = useState<User | null>(null)
+
+  const getErrorMessage = (err: unknown, fallback: string) => {
+    return err instanceof Error ? err.message : fallback
+  }
 
   useEffect(() => {
     const saved = localStorage.getItem('rocars_identifier')
     const remember = localStorage.getItem('rocars_remember')
 
     if (saved && remember === 'true') {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setForm((p) => ({ ...p, identifier: saved }))
       setRememberMe(true)
     }
@@ -53,136 +58,262 @@ export default function LoginPage() {
   useEffect(() => {
     const check = async () => {
       const { data } = await supabase.auth.getSession()
-      if (data.session) router.push(redirectTo)
+      if (data.session) {
+        // Check user role before redirecting
+        const { data: profile } = await supabase
+          .from('profiles')
+          .select('role')
+          .eq('id', data.session.user.id)
+          .single()
+        
+        if (isAdminLikeRole(profile?.role)) {
+          router.push('/admin/dashboard')
+        } else {
+          router.push(redirectTo)
+        }
+      }
     }
     check()
   }, [router, redirectTo])
 
   useEffect(() => {
     if (verified === 'true') {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setSuccessMessage('Email verified successfully! You can now login.')
     }
   }, [verified])
 
   // =========================
-  // LOGIN
+  // VERIFY 2FA CODE
   // =========================
-const handleLogin = async () => {
-  setLoading(true)
-  setError('')
-  setSuccessMessage('')
-
-  try {
-    if (!form.identifier || !form.password) {
-      throw new Error('Please fill in all fields')
+  const verify2FACode = async () => {
+    if (!form.twoFactorCode) {
+      setError('Please enter your 2FA verification code')
+      return
     }
 
-    let emailToUse = form.identifier.trim()
+    setLoading(true)
+    setError('')
 
-    const isPhone = /^[0-9+]{10,15}$/.test(form.identifier)
+    try {
+      if (!pendingUser) {
+        throw new Error('Session expired. Please login again.')
+      }
 
+      const response = await fetch('/api/auth/2fa/verify-login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          userId: pendingUser.id,
+          token: form.twoFactorCode,
+        }),
+      })
+      const result = await response.json()
+
+      if (!response.ok) {
+        throw new Error(result.error || 'Invalid 2FA verification code')
+      }
+
+      // 2FA verified successfully - complete login
+      await completeLogin(pendingUser)
+
+    } catch (err) {
+      console.error('2FA verification error:', err)
+      setError(getErrorMessage(err, '2FA verification failed'))
+      setLoading(false)
+    }
+  }
+
+  // =========================
+  // COMPLETE LOGIN AFTER 2FA
+  // =========================
+  const completeLogin = async (user: User) => {
+    try {
+      if (rememberMe) {
+        localStorage.setItem('rocars_identifier', form.identifier)
+        localStorage.setItem('rocars_remember', 'true')
+      } else {
+        localStorage.removeItem('rocars_identifier')
+        localStorage.removeItem('rocars_remember')
+      }
+
+      await supabase
+        .from('profiles')
+        .update({ last_login: new Date().toISOString() })
+        .eq('id', user.id)
+
+      // Get user profile with role
+      const { data: profile, error: profileError } = await supabase
+        .from('profiles')
+        .select('role, username, email, first_name, last_name')
+        .eq('id', user.id)
+        .single()
+
+      if (profileError) {
+        console.error('Profile fetch error:', profileError)
+      }
+
+      console.log('Profile data:', profile)
+      console.log('Is admin?', profile?.role === 'admin')
+
+      // Store role in session storage for quick access
+      if (profile?.role) {
+        sessionStorage.setItem('userRole', profile.role)
+        sessionStorage.setItem('userName', `${profile.first_name || ''} ${profile.last_name || ''}`.trim())
+      }
+
+      // Clear 2FA state
+      setShow2FAField(false)
+      setRequires2FA(false)
+      setPendingUser(null)
+
+      // Redirect based on role
+      if (isAdminLikeRole(profile?.role)) {
+        console.log('Redirecting to admin dashboard...')
+        router.push('/admin/dashboard')
+      } else {
+        console.log('Redirecting to:', redirectTo)
+        router.push(redirectTo)
+      }
+    } catch (err) {
+      console.error('Complete login error:', err)
+      setError(getErrorMessage(err, 'Failed to complete login'))
+      setLoading(false)
+    }
+  }
+
+  // =========================
+  // RESOLVE IDENTIFIER TO EMAIL
+  // =========================
+  const resolveIdentifierToEmail = async (identifier: string): Promise<string | null> => {
+    const trimmedIdentifier = identifier.trim().toLowerCase()
+    
+    // If it's already an email, return as is
+    if (trimmedIdentifier.includes('@')) {
+      return trimmedIdentifier
+    }
+    
+    // Check if it's a phone number
+    const isPhone = /^[0-9+]{10,15}$/.test(trimmedIdentifier)
+    
     if (isPhone) {
       const { data } = await supabase
         .from('profiles')
         .select('email')
-        .eq('phone_number', form.identifier)
+        .eq('phone_number', trimmedIdentifier)
         .maybeSingle()
-
-      if (!data) throw new Error('Phone number not found')
-      emailToUse = data.email
-    } else if (!form.identifier.includes('@')) {
-      const { data } = await supabase
-        .from('profiles')
-        .select('email')
-        .eq('username', form.identifier.toLowerCase())
-        .maybeSingle()
-
-      if (!data) throw new Error('Username not found')
-      emailToUse = data.email
+      
+      return data?.email || null
     }
+    
+    // Check if it's a username
+    const { data } = await supabase
+      .from('profiles')
+      .select('email')
+      .eq('username', trimmedIdentifier)
+      .maybeSingle()
+    
+    return data?.email || null
+  }
 
-    const { data, error } = await supabase.auth.signInWithPassword({
-      email: emailToUse,
-      password: form.password,
-    })
-
-    if (error) throw error
-    if (!data.user) throw new Error('Login failed')
-
-    if (!data.user.email_confirmed_at) {
-      await supabase.auth.signOut()
-      throw new Error('Please verify your email first. Check your inbox.')
-    }
-
-    setUserId(data.user.id)
-
-    const { data: settings } = await supabase
-      .from('two_factor_auth')
-      .select('enabled, passcode')
-      .eq('user_id', data.user.id)
+  const getProfileProvider = async (email: string): Promise<string | null> => {
+    const { data } = await supabase
+      .from('profiles')
+      .select('provider')
+      .eq('email', email)
       .maybeSingle()
 
-    // FIXED: Handle 2FA without throwing error
-    if (settings?.enabled) {
-      // If we haven't entered 2FA code yet, show the field and stop
-      if (!form.twoFactorCode) {
+    return data?.provider || null
+  }
+
+  const getAuthErrorMessage = (error: AuthError | Error) => {
+    const message = error?.message || ''
+
+    if (/invalid login credentials/i.test(message)) {
+      return 'Invalid email or password. Please check your credentials and try again.'
+    }
+
+    if (/email.*not confirmed|confirm your email/i.test(message)) {
+      return 'Please verify your email before signing in.'
+    }
+
+    if (/too many requests/i.test(message)) {
+      return 'Too many sign-in attempts. Please wait a moment and try again.'
+    }
+
+    return message || 'Login failed'
+  }
+
+  // =========================
+  // LOGIN (STEP 1)
+  // =========================
+  const handleLogin = async () => {
+    setLoading(true)
+    setError('')
+    setSuccessMessage('')
+
+    try {
+      if (!form.identifier || !form.password) {
+        throw new Error('Please fill in all fields')
+      }
+
+      // Resolve identifier to email
+      const emailToUse = await resolveIdentifierToEmail(form.identifier)
+      
+      if (!emailToUse) {
+        throw new Error('Username/Phone number not found')
+      }
+
+      const { data, error } = await supabase.auth.signInWithPassword({
+        email: emailToUse,
+        password: form.password,
+      })
+
+      if (error) {
+        if (/invalid login credentials/i.test(error.message)) {
+          const provider = await getProfileProvider(emailToUse)
+
+          if (provider === 'google') {
+            throw new Error(
+              'This account was created with Google. Use Continue with Google, or reset your password first if you want to sign in with email and password.'
+            )
+          }
+        }
+
+        throw new Error(getAuthErrorMessage(error))
+      }
+      
+      if (!data.user) throw new Error('Login failed')
+
+      if (!data.user.email_confirmed_at) {
+        await supabase.auth.signOut()
+        throw new Error('Please verify your email first. Check your inbox.')
+      }
+
+      // Check if 2FA is enabled for this user
+      const twoFactorResponse = await fetch('/api/auth/2fa/status')
+      const twoFactorStatus = twoFactorResponse.ok
+        ? await twoFactorResponse.json()
+        : { enabled: false }
+
+      // If 2FA is enabled, store pending user and show 2FA field
+      if (twoFactorStatus.enabled === true) {
+        setPendingUser(data.user)
         setRequires2FA(true)
         setShow2FAField(true)
-        setLoading(false) // Important: stop loading state
-        return // Just return, don't throw error
+        setLoading(false)
+        return
       }
 
-      // If we have a code, verify it
-      if (form.twoFactorCode !== settings.passcode) {
-        await supabase.auth.signOut()
-        throw new Error('Invalid 2FA code')
-      }
+      // No 2FA, complete login directly
+      await completeLogin(data.user)
+
+    } catch (err) {
+      console.error('Login error:', err)
+      setError(getErrorMessage(err, 'Login failed'))
+      setLoading(false)
     }
-
-    // Only proceed with login if no 2FA or 2FA is verified
-    if (rememberMe) {
-      localStorage.setItem('rocars_identifier', form.identifier)
-      localStorage.setItem('rocars_remember', 'true')
-    } else {
-      localStorage.removeItem('rocars_identifier')
-      localStorage.removeItem('rocars_remember')
-    }
-
-    await supabase
-      .from('profiles')
-      .update({ last_login: new Date().toISOString() })
-      .eq('id', data.user.id)
-
-    await new Promise(resolve => setTimeout(resolve, 500))
-    
-    const { data: profile, error: profileError } = await supabase
-      .from('profiles')
-      .select('role, username, email')
-      .eq('id', data.user.id)
-      .maybeSingle()
-
-    console.log('Profile data:', profile)
-    console.log('Profile error:', profileError)
-    console.log('Is admin?', profile?.role === 'admin')
-
-    if (profile?.role) {
-      sessionStorage.setItem('userRole', profile.role)
-    }
-
-    if (profile?.role === 'admin') {
-      console.log('Redirecting to admin dashboard...')
-      router.push('/admin/dashboard')
-    } else {
-      console.log('Redirecting to:', redirectTo)
-      router.push(redirectTo)
-    }
-  } catch (err: any) {
-    console.error('Login error:', err)
-    setError(err.message || 'Login failed')
-  } finally {
-    setLoading(false)
   }
-}
 
   // =========================
   // GOOGLE LOGIN
@@ -194,7 +325,7 @@ const handleLogin = async () => {
     const { error } = await supabase.auth.signInWithOAuth({
       provider: 'google',
       options: {
-        redirectTo: `${window.location.origin}/auth/callback?redirect=${redirectTo}`,
+        redirectTo: `${window.location.origin}/auth/callback?redirect=${encodeURIComponent(redirectTo)}`,
       },
     })
 
@@ -216,43 +347,32 @@ const handleLogin = async () => {
       return
     }
 
-    let emailToUse = form.identifier.trim()
-
-    const isPhone = /^[0-9+]{10,15}$/.test(form.identifier)
-
     try {
-      if (isPhone) {
-        const { data } = await supabase
-          .from('profiles')
-          .select('email')
-          .eq('phone_number', form.identifier)
-          .maybeSingle()
-
-        if (!data) throw new Error('Phone number not found')
-        emailToUse = data.email
-      } else if (!form.identifier.includes('@')) {
-        const { data } = await supabase
-          .from('profiles')
-          .select('email')
-          .eq('username', form.identifier.toLowerCase())
-          .maybeSingle()
-
-        if (!data) throw new Error('Username not found')
-        emailToUse = data.email
+      const emailToUse = await resolveIdentifierToEmail(form.identifier)
+      
+      if (!emailToUse) {
+        throw new Error('Email/Username/Phone number not found')
       }
 
       const { error } = await supabase.auth.resetPasswordForEmail(
         emailToUse,
         {
-          redirectTo: `${window.location.origin}/reset-password`,
+          redirectTo: `${window.location.origin}/auth/callback?redirect=${encodeURIComponent('/reset-password')}`,
         }
       )
 
       if (error) throw error
 
       setSuccessMessage('Password reset link sent to your email!')
-    } catch (err: any) {
-      setError(err.message)
+    } catch (err) {
+      setError(getErrorMessage(err, 'Failed to send password reset email'))
+    }
+  }
+
+  // Handle 2FA code submission on Enter key
+  const handle2FAKeyPress = (e: React.KeyboardEvent) => {
+    if (e.key === 'Enter') {
+      verify2FACode()
     }
   }
 
@@ -264,35 +384,33 @@ const handleLogin = async () => {
           <div className="hidden md:flex md:w-1/2 bg-black p-8 flex-col">
             <div className="flex-1 flex flex-col justify-between">
               <div>
-                <h2 className="text-2xl font-bold text-white mb-2">Login</h2>
+                <h2 className="text-2xl font-bold text-white mb-2">
+                  {show2FAField ? '2FA Verification' : 'Login'}
+                </h2>
                 <p className="text-gray-400 text-sm">
-                  Sign in to access your account.
+                  {show2FAField 
+                    ? 'Enter your 2FA code to complete login'
+                    : 'Sign in to access your account and explore premium auto parts'
+                  }
                 </p>
               </div>
               
-              {/* Both Images Container */}
-    <div className="my-2 space-y-6">
-      {/* Logo Image */}
-      <div className="relative w-full h-35">
-        <img
-          src="/logo.png"
-          alt="ROCARS Automotive"
-          className="w-99  h-77 object-contain"
-        />
-      </div>
-      
-      {/* Tire Image */}
-      <div className="relative w-full h-50">
-        <img
-          src="/tirepc.png"
-          alt="Tire"
-          className="w-99 h-66 object-contain"
-        />
-      </div>
-    </div>
+              <div className="my-8">
+                <div className="relative w-full h-50">
+                  <Image
+                    src="/logo.png"
+                    alt="ROCARS Automotive"
+                    width={360}
+                    height={200}
+                    className="w-full h-full object-contain"
+                  />
+                </div>
+              </div>
 
               <div className="mt-auto">
                 <div className="flex items-center gap-2 text-gray-500 text-xs">
+                  <Shield size={14} />
+                  <span>Secured login with 2FA support</span>
                 </div>
               </div>
             </div>
@@ -306,10 +424,13 @@ const handleLogin = async () => {
                 <span className="font-bold text-sm">R</span>
               </div>
               <h1 className="text-2xl font-semibold tracking-tight text-black">
-                Welcome Back
+                {show2FAField ? '2-Step Verification' : 'Welcome Back'}
               </h1>
               <p className="text-sm text-gray-500 mt-1">
-                Sign in to your account
+                {show2FAField 
+                  ? 'Enter the 6-digit code from your authenticator app'
+                  : 'Sign in to your account'
+                }
               </p>
             </div>
 
@@ -330,129 +451,156 @@ const handleLogin = async () => {
             )}
 
             <div className="space-y-4">
-              {/* IDENTIFIER */}
-              <div>
-                <input
-                  type="text"
-                  placeholder="Email / Username / Phone number"
-                  value={form.identifier}
-                  onChange={(e) =>
-                    setForm({ ...form, identifier: e.target.value })
-                  }
-                  className="w-full h-11 px-4 rounded-2xl border border-gray-200 bg-white text-sm focus:outline-none focus:ring-2 focus:ring-black/10 focus:border-black"
-                />
-              </div>
-
-              {/* PASSWORD */}
-              <div
-                className="relative"
-                onFocus={() => setFocusedField('password')}
-                onBlur={() => setTimeout(() => setFocusedField(null), 200)}
-              >
-                <div className="relative">
-                  <input
-                    type={showPassword ? 'text' : 'password'}
-                    placeholder="Password"
-                    value={form.password}
-                    onChange={(e) =>
-                      setForm({ ...form, password: e.target.value })
-                    }
-                    className="w-full h-11 px-4 pr-11 rounded-2xl border border-gray-200 bg-white text-sm focus:outline-none focus:ring-2 focus:ring-black/10 focus:border-black"
-                  />
-
-                  <button
-                    type="button"
-                    onClick={() => setShowPassword(!showPassword)}
-                    className="absolute right-3 top-3 text-gray-400 hover:text-black"
-                  >
-                    {showPassword ? <EyeOff size={17} /> : <Eye size={17} />}
-                  </button>
-                </div>
-              </div>
-
               {/* 2FA FIELD - shows only if enabled */}
-              {show2FAField && requires2FA && (
-                <div className="relative">
-                  <Lock className="absolute left-4 top-3 w-4 text-gray-400" />
-                  <input
-                    type="text"
-                    placeholder="2FA Verification Code"
-                    value={form.twoFactorCode}
-                    onChange={(e) =>
-                      setForm({ ...form, twoFactorCode: e.target.value })
-                    }
-                    className="w-full h-11 pl-10 pr-4 rounded-2xl border border-gray-200 bg-white text-sm focus:outline-none focus:ring-2 focus:ring-black/10 focus:border-black"
-                  />
-                </div>
-              )}
-
-              {/* REMEMBER ME + FORGOT PASSWORD */}
-              <div className="flex items-center justify-between text-sm">
-                <label className="flex items-center gap-2 text-gray-600 cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={rememberMe}
-                    onChange={(e) => setRememberMe(e.target.checked)}
-                    className="rounded border-gray-300 text-black focus:ring-black"
-                  />
-                  <span className="text-xs">Remember me</span>
-                </label>
-
-                <button
-                  type="button"
-                  onClick={handleForgotPassword}
-                  className="text-xs text-black hover:underline font-medium"
-                >
-                  Forgot password?
-                </button>
-              </div>
-
-              {/* LOGIN BUTTON */}
-              <button
-                onClick={handleLogin}
-                disabled={loading}
-                className="w-full h-11 rounded-2xl bg-black text-white text-sm font-medium hover:bg-gray-900 transition disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
-              >
-                {loading && <Loader2 className="w-4 h-4 animate-spin" />}
-                {loading ? 'Signing in...' : 'Sign In'}
-              </button>
-
-              {/* DIVIDER */}
-              <div className="relative my-4">
-                <div className="absolute inset-0 flex items-center">
-                  <div className="w-full border-t border-gray-200"></div>
-                </div>
-                <div className="relative flex justify-center text-xs">
-                  <span className="px-3 bg-white text-gray-400">or</span>
-                </div>
-              </div>
-
-              {/* GOOGLE BUTTON */}
-              <button
-                onClick={handleGoogleLogin}
-                disabled={googleLoading}
-                className="w-full h-11 rounded-2xl border border-gray-200 bg-white text-sm font-medium hover:bg-gray-50 transition flex items-center justify-center gap-2"
-              >
-                {googleLoading ? (
-                  <Loader2 className="w-4 h-4 animate-spin" />
-                ) : (
-                  <FaGoogle className="text-red-500" />
-                )}
-                Continue with Google
-              </button>
-
-              {/* SIGN UP LINK */}
-              <div className="pt-2 text-center">
-                <p className="text-xs text-gray-500">
-                  Don't have an account?{' '}
+              {show2FAField && requires2FA ? (
+                <>
+                  <div className="relative">
+                    <Lock className="absolute left-4 top-3 w-4 text-gray-400" />
+                    <input
+                      type="text"
+                      placeholder="Enter 6-digit 2FA code"
+                      value={form.twoFactorCode}
+                      onChange={(e) =>
+                        setForm({ ...form, twoFactorCode: e.target.value })
+                      }
+                      onKeyPress={handle2FAKeyPress}
+                      maxLength={6}
+                      autoFocus
+                      className="w-full h-12 pl-10 pr-4 rounded-2xl border border-gray-200 bg-white text-sm focus:outline-none focus:ring-2 focus:ring-black/10 focus:border-black text-center text-lg tracking-wider"
+                    />
+                  </div>
+                  
+                  {/* Back to login button */}
                   <button
-                    onClick={() => router.push('/register')}
-                    className="text-black font-medium hover:underline"
+                    onClick={() => {
+                      setShow2FAField(false)
+                      setRequires2FA(false)
+                      setPendingUser(null)
+                      setForm({ ...form, twoFactorCode: '' })
+                      setError('')
+                    }}
+                    className="text-xs text-gray-500 hover:text-black text-center block w-full"
                   >
-                    Create account
+                    ← Back to login
                   </button>
-                </p>
-              </div>
+
+                  {/* Verify 2FA Button */}
+                  <button
+                    onClick={verify2FACode}
+                    disabled={loading}
+                    className="w-full h-12 rounded-2xl bg-black text-white text-sm font-medium hover:bg-gray-900 transition disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2 mt-4"
+                  >
+                    {loading && <Loader2 className="w-4 h-4 animate-spin" />}
+                    {loading ? 'Verifying...' : 'Verify & Login'}
+                  </button>
+                </>
+              ) : (
+                <>
+                  {/* IDENTIFIER */}
+                  <div>
+                    <input
+                      type="text"
+                      placeholder="Email / Username / Phone number"
+                      value={form.identifier}
+                      onChange={(e) =>
+                        setForm({ ...form, identifier: e.target.value })
+                      }
+                      className="w-full h-11 px-4 rounded-2xl border border-gray-200 bg-white text-sm focus:outline-none focus:ring-2 focus:ring-black/10 focus:border-black"
+                    />
+                  </div>
+
+                  {/* PASSWORD */}
+                  <div className="relative">
+                    <div className="relative">
+                      <input
+                        type={showPassword ? 'text' : 'password'}
+                        placeholder="Password"
+                        value={form.password}
+                        onChange={(e) =>
+                          setForm({ ...form, password: e.target.value })
+                        }
+                        className="w-full h-11 px-4 pr-11 rounded-2xl border border-gray-200 bg-white text-sm focus:outline-none focus:ring-2 focus:ring-black/10 focus:border-black"
+                      />
+
+                      <button
+                        type="button"
+                        onClick={() => setShowPassword(!showPassword)}
+                        className="absolute right-3 top-3 text-gray-400 hover:text-black"
+                      >
+                        {showPassword ? <EyeOff size={17} /> : <Eye size={17} />}
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* REMEMBER ME + FORGOT PASSWORD */}
+                  <div className="flex items-center justify-between text-sm">
+                    <label className="flex items-center gap-2 text-gray-600 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={rememberMe}
+                        onChange={(e) => setRememberMe(e.target.checked)}
+                        className="rounded border-gray-300 text-black focus:ring-black"
+                      />
+                      <span className="text-xs">Remember me</span>
+                    </label>
+
+                    <button
+                      type="button"
+                      onClick={handleForgotPassword}
+                      className="text-xs text-black hover:underline font-medium"
+                    >
+                      Forgot password?
+                    </button>
+                  </div>
+
+                  {/* LOGIN BUTTON */}
+                  <button
+                    onClick={handleLogin}
+                    disabled={loading}
+                    className="w-full h-11 rounded-2xl bg-black text-white text-sm font-medium hover:bg-gray-900 transition disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+                  >
+                    {loading && <Loader2 className="w-4 h-4 animate-spin" />}
+                    {loading ? 'Signing in...' : 'Sign In'}
+                  </button>
+
+                  {/* DIVIDER */}
+                  <div className="relative my-4">
+                    <div className="absolute inset-0 flex items-center">
+                      <div className="w-full border-t border-gray-200"></div>
+                    </div>
+                    <div className="relative flex justify-center text-xs">
+                      <span className="px-3 bg-white text-gray-400">or</span>
+                    </div>
+                  </div>
+
+                  {/* GOOGLE BUTTON */}
+                  <button
+                    onClick={handleGoogleLogin}
+                    disabled={googleLoading}
+                    className="w-full h-11 rounded-2xl border border-gray-200 bg-white text-sm font-medium hover:bg-gray-50 transition flex items-center justify-center gap-2"
+                  >
+                    {googleLoading ? (
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                    ) : (
+                      <FaGoogle className="text-red-500" />
+                    )}
+                    Continue with Google
+                  </button>
+
+                  {/* SIGN UP LINK */}
+                  <div className="pt-2 text-center">
+                    <p className="text-xs text-gray-500">
+                      Don&apos;t have an account?{' '}
+                      <button
+                        onClick={() => router.push('/register')}
+                        className="text-black font-medium hover:underline"
+                      >
+                        Create account
+                      </button>
+                    </p>
+                  </div>
+                </>
+              )}
             </div>
           </div>
         </div>

@@ -146,9 +146,17 @@ export default function RefundsPage() {
             .from('orders')
             .update({ 
               order_status: 'refunded',
+              payment_status: 'refunded',
               refund_approved_at: new Date().toISOString()
             })
             .eq('id', refund.order_id);
+
+          await supabase
+            .from('payments')
+            .update({
+              payment_status: 'refunded'
+            })
+            .eq('order_id', refund.order_id);
         }
       }
 

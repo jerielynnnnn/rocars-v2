@@ -4,6 +4,8 @@
 import { useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { supabase } from '@/lib/supabase';
+import { canAccessAdminPath, isAdminLikeRole, STAFF_DEFAULT_ADMIN_PATH } from '@/lib/admin-role';
+import { usePathname } from 'next/navigation';
 
 export default function AdminLayout({
   children,
@@ -11,6 +13,7 @@ export default function AdminLayout({
   children: React.ReactNode;
 }) {
   const router = useRouter();
+  const pathname = usePathname();
 
   // Protect admin routes
   useEffect(() => {
@@ -29,13 +32,18 @@ export default function AdminLayout({
         .eq('id', session.user.id)
         .single();
 
-      if (profile?.role !== 'admin') {
+      if (!isAdminLikeRole(profile?.role)) {
         router.push('/');
+        return;
+      }
+
+      if (!canAccessAdminPath(profile?.role, pathname || '/admin/dashboard')) {
+        router.push(profile?.role === 'admin' ? '/admin/dashboard' : STAFF_DEFAULT_ADMIN_PATH);
       }
     };
 
     checkAdmin();
-  }, [router]);
+  }, [pathname, router]);
 
   return (
     <div className="min-h-screen bg-gray-50">

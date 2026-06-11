@@ -60,7 +60,10 @@ interface Voucher {
   max_discount: number | null
   description: string | null
   valid_until: string
+  valid_from: string
   is_active: boolean
+  used_count: number
+  usage_limit: number | null
 }
 
 interface ProductRating {
@@ -171,7 +174,6 @@ export default function ProductsPage() {
     }
   }
 
-  // FIXED: Load user vouchers with proper filtering
   const loadUserVouchers = async (userId: string) => {
     try {
       const { data, error } = await supabase
@@ -234,68 +236,81 @@ export default function ProductsPage() {
       })
       setProductImages(imageMap)
 
-      // Fetch product ratings from reviews table
-      const { data: reviews } = await supabase
-        .from('reviews')
-        .select('product_id, rating')
-        .in('product_id', ids)
-
-      // Calculate average ratings
-      const ratingMap = new Map<number, { sum: number; count: number }>()
-      reviews?.forEach((review) => {
-        const existing = ratingMap.get(review.product_id) || { sum: 0, count: 0 }
-        ratingMap.set(review.product_id, {
-          sum: existing.sum + review.rating,
-          count: existing.count + 1
+      if (ids.length > 0) {
+        const ratingsResponse = await fetch('/api/products/ratings', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({ ids }),
         })
-      })
 
-      const ratingsData: Map<number, ProductRating> = new Map()
-      ratingMap.forEach((value, productId) => {
-        ratingsData.set(productId, {
-          product_id: productId,
-          average_rating: value.sum / value.count,
-          review_count: value.count
-        })
-      })
-      setProductRatings(ratingsData)
+        if (ratingsResponse.ok) {
+          const { ratings } = await ratingsResponse.json() as { ratings?: ProductRating[] }
+          const ratingsData: Map<number, ProductRating> = new Map()
+
+          ratings?.forEach((rating) => {
+            ratingsData.set(rating.product_id, rating)
+          })
+
+          setProductRatings(ratingsData)
+        } else {
+          setProductRatings(new Map())
+        }
+      } else {
+        setProductRatings(new Map())
+      }
     }
 
     setLoading(false)
   }
-const fetchVouchers = async () => {
-  // Check if user is authenticated first
-  const { data: { session } } = await supabase.auth.getSession()
-  
-  // Don't fetch vouchers if not logged in
-  if (!session) {
-    console.log('User not authenticated, skipping voucher fetch')
-    setVouchers([]) // Clear any existing vouchers
-    return
-  }
 
-  try {
-    const now = new Date().toISOString()
-    const { data, error } = await supabase
-      .from('vouchers')
-      .select('*')
-      .eq('is_active', true)
-      .lte('valid_from', now)
-      .gte('valid_until', now)
-      .order('created_at', { ascending: false })
-
-    if (error) {
-      console.error('Error fetching vouchers:', error)
+  // FIXED: Fetch only currently valid vouchers
+  const fetchVouchers = async () => {
+    // Check if user is authenticated first
+    const { data: { session } } = await supabase.auth.getSession()
+    
+    // Don't fetch vouchers if not logged in
+    if (!session) {
+      setVouchers([])
       return
     }
 
-    if (data) {
-      setVouchers(data)
+    try {
+      const now = new Date().toISOString()
+      
+      // Fetch only vouchers that are:
+      // 1. Active (is_active = true)
+      // 2. Valid from date <= now
+      // 3. Valid until date >= now
+      const { data, error } = await supabase
+        .from('vouchers')
+        .select('*')
+        .eq('is_active', true)
+        .lte('valid_from', now)
+        .gte('valid_until', now)
+        .order('created_at', { ascending: false })
+
+      if (error) {
+        console.error('Error fetching vouchers:', error)
+        return
+      }
+
+      if (data) {
+        // Additional client-side filtering for safety
+        const nowDate = new Date()
+        const validVouchers = data.filter(voucher => {
+          const validFrom = new Date(voucher.valid_from)
+          const validUntil = new Date(voucher.valid_until)
+          return validFrom <= nowDate && validUntil >= nowDate && voucher.is_active === true
+        })
+        
+        setVouchers(validVouchers)
+      }
+    } catch (error) {
+      console.error('Error in fetchVouchers:', error)
     }
-  } catch (error) {
-    console.error('Error in fetchVouchers:', error)
   }
-}
 
   const filterProducts = () => {
     let filtered = [...products]
@@ -350,7 +365,6 @@ const fetchVouchers = async () => {
     localStorage.setItem('wishlist', JSON.stringify(updated))
   }
 
-  // FIXED: Handle claim voucher without applied_at field
   const handleClaimVoucher = async (voucher: Voucher, e: React.MouseEvent) => {
     e.preventDefault()
     e.stopPropagation()
@@ -380,10 +394,35 @@ const fetchVouchers = async () => {
       return
     }
 
+    // Check if voucher is still valid (expiration check)
+    const now = new Date()
+    const validUntil = new Date(voucher.valid_until)
+    const validFrom = new Date(voucher.valid_from)
+    
+    if (now < validFrom) {
+      setShowVoucherAlert({ 
+        show: true, 
+        message: 'This voucher is not yet available!', 
+        type: 'error' 
+      })
+      return
+    }
+    
+    if (now > validUntil) {
+      setShowVoucherAlert({ 
+        show: true, 
+        message: 'This voucher has expired!', 
+        type: 'error' 
+      })
+      // Refresh vouchers to remove expired ones
+      await fetchVouchers()
+      return
+    }
+
     setClaimingVoucher(voucher.id)
 
     try {
-      // First, check if the voucher is still valid
+      // First, check if the voucher is still valid in the database
       const { data: voucherData, error: voucherError } = await supabase
         .from('vouchers')
         .select('*')
@@ -429,7 +468,7 @@ const fetchVouchers = async () => {
         return
       }
 
-      // Insert voucher usage - REMOVED applied_at field (let database use default)
+      // Insert voucher usage
       const { error: insertError } = await supabase
         .from('voucher_usage')
         .insert({
@@ -438,7 +477,6 @@ const fetchVouchers = async () => {
           voucher_code: voucher.code,
           discount_amount: 0,
           free_shipping: voucher.type === 'free_shipping'
-          // Note: applied_at and created_at will use database defaults
         })
 
       if (insertError) {
@@ -454,13 +492,12 @@ const fetchVouchers = async () => {
 
       if (updateError) {
         console.error('Update error:', updateError)
-        // Don't throw here, the claim was still recorded
       }
 
       // Update local state
       setClaimedVouchers([...claimedVouchers, voucher.id])
       
-      // Create notification (optional - don't let it fail the claim)
+      // Create notification
       try {
         await supabase.from('notifications').insert({
           user_id: currentSession.user.id,
@@ -589,7 +626,6 @@ const fetchVouchers = async () => {
       maximumFractionDigits: 0,
     }).format(price)
 
-  // Render stars based on rating
   const renderStars = (rating: number) => {
     const fullStars = Math.floor(rating)
     const hasHalfStar = rating % 1 >= 0.5
@@ -637,6 +673,13 @@ const fetchVouchers = async () => {
       default:
         return 'DISCOUNT'
     }
+  }
+
+  // Check if a voucher is expired
+  const isVoucherExpired = (voucher: Voucher) => {
+    const now = new Date()
+    const validUntil = new Date(voucher.valid_until)
+    return now > validUntil
   }
 
   const saleCount = filteredProducts.filter((p) => p.is_on_sale).length
@@ -700,7 +743,6 @@ const fetchVouchers = async () => {
             </Link>
           </div>
 
-          {/* Star Rating Display */}
           <div className="flex items-center gap-2">
             {renderStars(averageRating)}
             {reviewCount > 0 ? (
@@ -787,6 +829,9 @@ const fetchVouchers = async () => {
     )
   }
 
+  // Filter only non-expired vouchers for display
+  const availableVouchers = vouchers.filter(v => !isVoucherExpired(v))
+
   return (
     <main className="min-h-screen bg-[#f6f6f4] text-black">
       {/* Alert Toast */}
@@ -820,24 +865,24 @@ const fetchVouchers = async () => {
         </div>
       </section>
 
-      {/* VOUCHERS SECTION - MODIFIED: "View All" opens floating modal */}
-      <section className="mx-auto max-w-7xl px-4 py-8 lg:px-8">
-        <div className="flex items-center justify-between mb-4">
-          <div className="flex items-center gap-2">
-            <Gift className="h-5 w-5 text-yellow-500" />
-            <h2 className="text-xl font-bold text-black">Available Vouchers</h2>
+      {/* VOUCHERS SECTION - Only show if there are available vouchers */}
+      {availableVouchers.length > 0 && (
+        <section className="mx-auto max-w-7xl px-4 py-8 lg:px-8">
+          <div className="flex items-center justify-between mb-4">
+            <div className="flex items-center gap-2">
+              <Gift className="h-5 w-5 text-yellow-500" />
+              <h2 className="text-xl font-bold text-black">Available Vouchers</h2>
+            </div>
+            <button 
+              onClick={() => setIsVoucherModalOpen(true)} 
+              className="text-xs text-yellow-600 hover:underline"
+            >
+              View All
+            </button>
           </div>
-          <button 
-            onClick={() => setIsVoucherModalOpen(true)} 
-            className="text-xs text-yellow-600 hover:underline"
-          >
-            View All
-          </button>
-        </div>
 
-        {vouchers.slice(0, 3).length > 0 ? (
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-            {vouchers.slice(0, 3).map((voucher) => {
+            {availableVouchers.slice(0, 3).map((voucher) => {
               const isClaimed = claimedVouchers.includes(voucher.id)
               
               return (
@@ -906,19 +951,11 @@ const fetchVouchers = async () => {
               )
             })}
           </div>
-        ) : (
-          <div className="bg-white rounded-2xl border border-gray-200 p-8 text-center">
-            <div className="w-16 h-16 rounded-full bg-gray-100 flex items-center justify-center mx-auto mb-3">
-              <Gift className="h-8 w-8 text-gray-400" />
-            </div>
-            <h3 className="text-sm font-medium text-gray-700">No Vouchers Available</h3>
-            <p className="text-xs text-gray-400 mt-1">Check back later for exciting offers!</p>
-          </div>
-        )}
-      </section>
+        </section>
+      )}
 
-      {/* FLOATING VOUCHER MODAL */}
-      {isVoucherModalOpen && (
+      {/* FLOATING VOUCHER MODAL - Only show if there are available vouchers */}
+      {isVoucherModalOpen && availableVouchers.length > 0 && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm animate-in fade-in duration-200">
           <div className="relative max-w-3xl w-full max-h-[85vh] bg-white rounded-3xl shadow-2xl overflow-hidden animate-in zoom-in-95 duration-200">
             {/* Modal Header */}
@@ -937,86 +974,76 @@ const fetchVouchers = async () => {
 
             {/* Modal Body - Scrollable */}
             <div className="overflow-y-auto p-6 max-h-[calc(85vh-70px)]">
-              {vouchers.length > 0 ? (
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  {vouchers.map((voucher) => {
-                    const isClaimed = claimedVouchers.includes(voucher.id)
-                    
-                    return (
-                      <div key={voucher.id} className="bg-gradient-to-r from-yellow-50 to-white rounded-2xl border border-yellow-200 p-4 relative overflow-hidden">
-                        <div className="absolute top-0 right-0">
-                          <Sparkles className="h-16 w-16 text-yellow-200 opacity-50 -rotate-12" />
-                        </div>
-                        
-                        <div className="flex items-start justify-between">
-                          <div className="flex-1">
-                            <div className="flex items-center gap-2 mb-2">
-                              <div className="p-1.5 rounded-lg bg-yellow-100">
-                                {getVoucherIcon(voucher.type)}
-                              </div>
-                              <span className="text-xs font-semibold text-yellow-700 bg-yellow-100 px-2 py-0.5 rounded-full">
-                                {getVoucherBadge(voucher.type, voucher.value)}
-                              </span>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                {availableVouchers.map((voucher) => {
+                  const isClaimed = claimedVouchers.includes(voucher.id)
+                  
+                  return (
+                    <div key={voucher.id} className="bg-gradient-to-r from-yellow-50 to-white rounded-2xl border border-yellow-200 p-4 relative overflow-hidden">
+                      <div className="absolute top-0 right-0">
+                        <Sparkles className="h-16 w-16 text-yellow-200 opacity-50 -rotate-12" />
+                      </div>
+                      
+                      <div className="flex items-start justify-between">
+                        <div className="flex-1">
+                          <div className="flex items-center gap-2 mb-2">
+                            <div className="p-1.5 rounded-lg bg-yellow-100">
+                              {getVoucherIcon(voucher.type)}
                             </div>
-                            
-                            <h3 className="font-bold text-black text-sm">
-                              {voucher.type === 'percentage' && `${voucher.value}% OFF`}
-                              {voucher.type === 'fixed' && `₱${voucher.value.toLocaleString()} OFF`}
-                              {voucher.type === 'free_shipping' && 'Free Shipping'}
-                            </h3>
-                            
-                            {voucher.description && (
-                              <p className="text-xs text-gray-500 mt-1">{voucher.description}</p>
-                            )}
-                            
-                            <div className="flex items-center gap-3 mt-2 text-xs text-gray-400">
-                              {voucher.min_spend > 0 && (
-                                <span>Min. Spend ₱{voucher.min_spend.toLocaleString()}</span>
-                              )}
-                              {voucher.max_discount && voucher.type === 'percentage' && (
-                                <span>Max ₱{voucher.max_discount.toLocaleString()}</span>
-                              )}
-                            </div>
-                            
-                            <div className="flex items-center gap-1 mt-2 text-[10px] text-gray-400">
-                              <Clock className="h-3 w-3" />
-                              <span>Expires: {new Date(voucher.valid_until).toLocaleDateString()}</span>
-                            </div>
+                            <span className="text-xs font-semibold text-yellow-700 bg-yellow-100 px-2 py-0.5 rounded-full">
+                              {getVoucherBadge(voucher.type, voucher.value)}
+                            </span>
                           </div>
                           
-                          <button
-                            onClick={(e) => handleClaimVoucher(voucher, e)}
-                            disabled={isClaimed || claimingVoucher === voucher.id}
-                            className={`ml-3 px-3 py-1.5 rounded-lg text-xs font-medium transition whitespace-nowrap ${
-                              isClaimed
-                                ? 'bg-green-100 text-green-600 cursor-default'
-                                : claimingVoucher === voucher.id
-                                ? 'bg-yellow-200 text-yellow-700'
-                                : 'bg-yellow-400 text-black hover:bg-yellow-500'
-                            }`}
-                          >
-                            {claimingVoucher === voucher.id ? (
-                              <div className="h-4 w-4 animate-spin rounded-full border-2 border-black border-t-transparent" />
-                            ) : isClaimed ? (
-                              'Claimed ✓'
-                            ) : (
-                              'Claim'
+                          <h3 className="font-bold text-black text-sm">
+                            {voucher.type === 'percentage' && `${voucher.value}% OFF`}
+                            {voucher.type === 'fixed' && `₱${voucher.value.toLocaleString()} OFF`}
+                            {voucher.type === 'free_shipping' && 'Free Shipping'}
+                          </h3>
+                          
+                          {voucher.description && (
+                            <p className="text-xs text-gray-500 mt-1">{voucher.description}</p>
+                          )}
+                          
+                          <div className="flex items-center gap-3 mt-2 text-xs text-gray-400">
+                            {voucher.min_spend > 0 && (
+                              <span>Min. Spend ₱{voucher.min_spend.toLocaleString()}</span>
                             )}
-                          </button>
+                            {voucher.max_discount && voucher.type === 'percentage' && (
+                              <span>Max ₱{voucher.max_discount.toLocaleString()}</span>
+                            )}
+                          </div>
+                          
+                          <div className="flex items-center gap-1 mt-2 text-[10px] text-gray-400">
+                            <Clock className="h-3 w-3" />
+                            <span>Expires: {new Date(voucher.valid_until).toLocaleDateString()}</span>
+                          </div>
                         </div>
+                        
+                        <button
+                          onClick={(e) => handleClaimVoucher(voucher, e)}
+                          disabled={isClaimed || claimingVoucher === voucher.id}
+                          className={`ml-3 px-3 py-1.5 rounded-lg text-xs font-medium transition whitespace-nowrap ${
+                            isClaimed
+                              ? 'bg-green-100 text-green-600 cursor-default'
+                              : claimingVoucher === voucher.id
+                              ? 'bg-yellow-200 text-yellow-700'
+                              : 'bg-yellow-400 text-black hover:bg-yellow-500'
+                          }`}
+                        >
+                          {claimingVoucher === voucher.id ? (
+                            <div className="h-4 w-4 animate-spin rounded-full border-2 border-black border-t-transparent" />
+                          ) : isClaimed ? (
+                            'Claimed ✓'
+                          ) : (
+                            'Claim'
+                          )}
+                        </button>
                       </div>
-                    )
-                  })}
-                </div>
-              ) : (
-                <div className="bg-white rounded-2xl border border-gray-200 p-8 text-center">
-                  <div className="w-16 h-16 rounded-full bg-gray-100 flex items-center justify-center mx-auto mb-3">
-                    <Gift className="h-8 w-8 text-gray-400" />
-                  </div>
-                  <h3 className="text-sm font-medium text-gray-700">No Vouchers Available</h3>
-                  <p className="text-xs text-gray-400 mt-1">Check back later for exciting offers!</p>
-                </div>
-              )}
+                    </div>
+                  )
+                })}
+              </div>
             </div>
           </div>
         </div>

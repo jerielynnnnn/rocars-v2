@@ -9,6 +9,7 @@ import {
   Package,
   ShoppingCart,
   CreditCard,
+  RefreshCw,
   Star,
   Tags,
   Settings,
@@ -22,6 +23,7 @@ import {
 } from 'lucide-react';
 
 import { supabase } from '@/lib/supabase';
+import { canAccessAdminPath, getRoleModules, isStaffRole, STAFF_DEFAULT_ADMIN_PATH } from '@/lib/admin-role';
 
 const navItems = [
   { name: 'Dashboard', href: '/admin/dashboard', icon: LayoutDashboard },
@@ -29,6 +31,7 @@ const navItems = [
   { name: 'Products', href: '/admin/products', icon: Package },
   { name: 'Orders', href: '/admin/orders', icon: ShoppingCart },
   { name: 'Payments', href: '/admin/payments', icon: CreditCard },
+  { name: 'Refunds', href: '/admin/refunds', icon: RefreshCw },
   { name: 'Reviews', href: '/admin/reviews', icon: Star },
   { name: 'Categories', href: '/admin/categories', icon: Tags },
   { name: 'Vouchers', href: '/admin/vouchers', icon: Gift },
@@ -40,14 +43,30 @@ const navItems = [
 export function Sidebar() {
   const pathname = usePathname();
   const router = useRouter();
-  const [isCollapsed, setIsCollapsed] = useState(false);
+  const [isCollapsed, setIsCollapsed] = useState(() => {
+    if (typeof window === 'undefined') return false;
+    return localStorage.getItem('admin-sidebar-collapsed') === 'true';
+  });
+  const [userRole, setUserRole] = useState<string>('admin');
 
   // Load collapsed state from localStorage on mount
   useEffect(() => {
-    const savedState = localStorage.getItem('admin-sidebar-collapsed');
-    if (savedState !== null) {
-      setIsCollapsed(savedState === 'true');
-    }
+    const loadRole = async () => {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session) return;
+
+      const { data: profile } = await supabase
+        .from('profiles')
+        .select('role')
+        .eq('id', session.user.id)
+        .single();
+
+      if (profile?.role) {
+        setUserRole(profile.role);
+      }
+    };
+
+    loadRole();
   }, []);
 
   // Save collapsed state to localStorage
@@ -56,6 +75,11 @@ export function Sidebar() {
     setIsCollapsed(newState);
     localStorage.setItem('admin-sidebar-collapsed', String(newState));
   };
+
+  const visibleNavItems = navItems.filter((item) => canAccessAdminPath(userRole, item.href));
+  const roleModules = getRoleModules(userRole);
+  const isLimitedStaff = isStaffRole(userRole);
+  const adminHomeHref = isLimitedStaff ? STAFF_DEFAULT_ADMIN_PATH : '/admin/dashboard';
 
   const handleLogout = async () => {
     try {
@@ -112,7 +136,7 @@ export function Sidebar() {
 
         {/* Logo Section */}
         <div className={`p-4 border-b border-yellow-500/20 ${isCollapsed ? 'px-2' : ''}`}>
-          <Link href="/admin/dashboard" className="flex items-center gap-3 group">
+          <Link href={adminHomeHref} className="flex items-center gap-3 group">
             <img src="/logo.png" alt="ROCARS" className="w-10 h-10 object-contain" />
             {!isCollapsed && (
               <div>
@@ -126,7 +150,7 @@ export function Sidebar() {
         {/* Navigation */}
         <nav className="flex-1 overflow-y-auto py-4">
           <div className="space-y-1 px-2">
-            {navItems.map((item) => {
+            {visibleNavItems.map((item) => {
               const isActive =
                 pathname === item.href ||
                 pathname?.startsWith(item.href + '/');
@@ -181,7 +205,9 @@ export function Sidebar() {
                 </p>
               </div>
               <p className="text-[10px] text-gray-400 leading-relaxed">
-                Full administrative privileges enabled.
+                {isLimitedStaff
+                  ? `${roleModules.join(', ')} access enabled.`
+                  : 'Full administrative privileges enabled.'}
               </p>
             </div>
           )}

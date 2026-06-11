@@ -1,8 +1,10 @@
 // app/api/auth/2fa/verify-login/route.ts
 import { createServerClient } from '@supabase/ssr'
+import type { CookieOptions } from '@supabase/ssr'
 import { cookies } from 'next/headers'
 import { NextResponse } from 'next/server'
 import speakeasy from 'speakeasy'
+import { supabaseAdmin } from '@/lib/supabase-admin'
 
 export async function POST(request: Request) {
   try {
@@ -15,16 +17,17 @@ export async function POST(request: Request) {
           get(name: string) {
             return cookieStore.get(name)?.value
           },
-          set(name: string, value: string, options: any) {
+          set(name: string, value: string, options: CookieOptions) {
             cookieStore.set({ name, value, ...options })
           },
-          remove(name: string, options: any) {
+          remove(name: string, options: CookieOptions) {
             cookieStore.set({ name, value: '', ...options })
           },
         },
       }
     )
     
+    const { data: { user } } = await supabase.auth.getUser()
     const { userId, token } = await request.json()
 
     if (!userId || !token) {
@@ -34,8 +37,12 @@ export async function POST(request: Request) {
       )
     }
 
+    if (!user || user.id !== userId) {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    }
+
     // Get user's 2FA secret
-    const { data: settings, error: settingsError } = await supabase
+    const { data: settings, error: settingsError } = await supabaseAdmin
       .from('user_profile_settings')
       .select('two_factor_secret')
       .eq('user_id', userId)

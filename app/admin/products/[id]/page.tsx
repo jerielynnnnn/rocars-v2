@@ -3,6 +3,7 @@
 import { useState, useEffect } from 'react';
 import { useRouter, useParams } from 'next/navigation';
 import { supabase } from '@/lib/supabase';
+import { logAdminActivity } from '@/lib/admin-activity';
 import { ArrowLeft, X, Plus, Loader2, Tag, Percent } from 'lucide-react';
 import Link from 'next/link';
 
@@ -112,6 +113,14 @@ export default function EditProductPage() {
       .replace(/^-|-$/g, '');
   };
 
+  const getAccessToken = async () => {
+    const { data: { session } } = await supabase.auth.getSession();
+    if (!session?.access_token) {
+      throw new Error('Admin session expired. Please login again.');
+    }
+    return session.access_token;
+  };
+
   const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = Array.from(e.target.files || []);
     const totalImages = existingImages.length + newImages.length + files.length;
@@ -153,15 +162,27 @@ export default function EditProductPage() {
       }
     }
     
-    const { error } = await supabase
-      .from('product_images')
-      .delete()
-      .eq('id', imageId);
+    const accessToken = await getAccessToken();
+    const response = await fetch(`/api/admin/product-images?id=${imageId}`, {
+      method: 'DELETE',
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+      },
+    });
 
-    if (error) {
-      alert('Error deleting image: ' + error.message);
+    const result = await response.json();
+
+    if (!response.ok) {
+      alert('Error deleting image: ' + (result.error || 'Failed to delete image'));
       return;
     }
+
+    await logAdminActivity({
+      action: 'DELETE_PRODUCT_IMAGE',
+      target_type: 'product',
+      target_id: productId,
+      details: { image_id: imageId },
+    });
 
     setExistingImages(existingImages.filter(img => img.id !== imageId));
   };
@@ -202,16 +223,24 @@ export default function EditProductPage() {
           .from('product-images')
           .getPublicUrl(fileName);
         
-        const { error: dbError } = await supabase
-          .from('product_images')
-          .insert({
+        const accessToken = await getAccessToken();
+        const response = await fetch('/api/admin/product-images', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${accessToken}`,
+          },
+          body: JSON.stringify({
             product_id: parseInt(productId),
-            image_url: publicUrl
-          });
+            image_url: publicUrl,
+          }),
+        });
+
+        const result = await response.json();
         
-        if (dbError) {
-          console.error('DB insert error:', dbError);
-          throw new Error(`Database insert failed: ${dbError.message}`);
+        if (!response.ok) {
+          console.error('DB insert error:', result);
+          throw new Error(`Database insert failed: ${result.error || 'Failed to save image'}`);
         }
         
         console.log('Successfully uploaded:', fileName);
@@ -307,18 +336,6 @@ export default function EditProductPage() {
       
       const slug = generateSlug(formData.name);
       
-      // Check for duplicate slug
-      const { data: existingProduct } = await supabase
-        .from('products')
-        .select('id')
-        .eq('slug', slug)
-        .neq('id', productId)
-        .single();
-      
-      if (existingProduct) {
-        throw new Error('A product with this name already exists (duplicate slug)');
-      }
-
       // Prepare update data - CRITICAL: Ensure sale_price is properly set
       const updateData: any = {
         name: formData.name,
@@ -360,19 +377,37 @@ export default function EditProductPage() {
 
       console.log('Final update data:', updateData);
 
-      // Update the product
-      const { error: updateError, data: updatedProduct } = await supabase
-        .from('products')
-        .update(updateData)
-        .eq('id', productId)
-        .select();
+      const accessToken = await getAccessToken();
+      const response = await fetch(`/api/admin/products/${productId}`, {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${accessToken}`,
+        },
+        body: JSON.stringify({ product: updateData }),
+      });
 
-      if (updateError) {
-        console.error('Update error:', updateError);
-        throw updateError;
+      const responseText = await response.text();
+      const result = responseText ? JSON.parse(responseText) : {};
+
+      if (!response.ok) {
+        console.error('Product update API error:', {
+          status: response.status,
+          statusText: response.statusText,
+          result,
+          responseText,
+        });
+        throw new Error(result.error || responseText || 'Failed to update product');
       }
 
-      console.log('Product updated successfully:', updatedProduct);
+      console.log('Product updated successfully:', result.product);
+
+      await logAdminActivity({
+        action: 'UPDATE_PRODUCT',
+        target_type: 'product',
+        target_id: productId,
+        details: { name: updateData.name, sku: updateData.sku, stock: updateData.stock },
+      });
 
       // Upload new images if any
       if (newImages.length > 0) {

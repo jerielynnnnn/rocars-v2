@@ -1,11 +1,13 @@
 // app/api/auth/2fa/setup/route.ts
 import { createServerClient } from '@supabase/ssr'
+import type { CookieOptions } from '@supabase/ssr'
 import { cookies } from 'next/headers'
 import { NextResponse } from 'next/server'
 import speakeasy from 'speakeasy'
 import QRCode from 'qrcode'
+import { supabaseAdmin } from '@/lib/supabase-admin'
 
-export async function POST(request: Request) {
+export async function POST() {
   try {
     const cookieStore = await cookies()
     const supabase = createServerClient(
@@ -16,17 +18,17 @@ export async function POST(request: Request) {
           get(name: string) {
             return cookieStore.get(name)?.value
           },
-          set(name: string, value: string, options: any) {
+          set(name: string, value: string, options: CookieOptions) {
             try {
               cookieStore.set({ name, value, ...options })
-            } catch (error) {
+            } catch {
               // Handle cookie setting error
             }
           },
-          remove(name: string, options: any) {
+          remove(name: string, options: CookieOptions) {
             try {
               cookieStore.set({ name, value: '', ...options })
-            } catch (error) {
+            } catch {
               // Handle cookie removal error
             }
           },
@@ -53,7 +55,7 @@ export async function POST(request: Request) {
     )
 
     // Check if settings exist
-    const { data: existingSettings } = await supabase
+    const { data: existingSettings } = await supabaseAdmin
       .from('user_profile_settings')
       .select('id')
       .eq('user_id', user.id)
@@ -61,7 +63,7 @@ export async function POST(request: Request) {
 
     if (existingSettings) {
       // Update existing settings
-      const { error: updateError } = await supabase
+      const { error: updateError } = await supabaseAdmin
         .from('user_profile_settings')
         .update({
           two_factor_secret: secret.base32,
@@ -77,7 +79,7 @@ export async function POST(request: Request) {
       }
     } else {
       // Insert new settings
-      const { error: insertError } = await supabase
+      const { error: insertError } = await supabaseAdmin
         .from('user_profile_settings')
         .insert({
           user_id: user.id,

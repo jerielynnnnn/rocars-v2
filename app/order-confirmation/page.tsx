@@ -1,7 +1,7 @@
 // app/order-confirmation/page.tsx
 'use client'
 
-import { useEffect, useState } from 'react'
+import { Suspense, useEffect, useState } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
 import Link from 'next/link'
 import { supabase } from '@/lib/supabase'
@@ -67,7 +67,7 @@ interface Order {
   order_items: OrderItem[]
 }
 
-export default function OrderConfirmationPage() {
+function OrderConfirmationContent() {
   const router = useRouter()
   const searchParams = useSearchParams()
   const orderId = searchParams.get('orderId')
@@ -879,5 +879,13 @@ export default function OrderConfirmationPage() {
         </PageContainer>
       </PageSection>
     </>
+  )
+}
+
+export default function OrderConfirmationPage() {
+  return (
+    <Suspense fallback={<div className="min-h-screen flex items-center justify-center bg-[#f8f8f8]">Loading your order confirmation...</div>}>
+      <OrderConfirmationContent />
+    </Suspense>
   )
 }

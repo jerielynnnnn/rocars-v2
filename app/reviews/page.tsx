@@ -6,11 +6,9 @@ import { useRouter } from 'next/navigation'
 import { supabase } from '@/lib/supabase'
 import PageContainer from '@/components/layout/PageContainer'
 import PageSection from '@/components/layout/PageSection'
-import Image from 'next/image'
 import Link from 'next/link'
 import {
   Star,
-  StarHalf,
   Package,
   Calendar,
   MessageSquare,
@@ -20,28 +18,21 @@ import {
   XCircle,
   ShoppingBag,
   User,
-  ThumbsUp,
-  Clock,
-  Filter,
   Shield,
-  Zap,
-  Eye,
-  Sparkles,
   Users,
-  HelpCircle
+  HelpCircle,
 } from 'lucide-react'
 
 interface OrderItem {
   id: number
-  order_id: number
   product_id: number
   quantity: number
   price: number
+  order_id?: number  // Make order_id optional since it might not come from the nested query
   products: {
     id: number
     name: string
     slug: string
-    image?: string
     brand?: string
   }
 }
@@ -57,75 +48,25 @@ interface Review {
   id: number
   product_id: number
   rating: number
-  quality_rating: number
-  value_rating: number
-  performance_rating: number
-  appearance_rating: number
   comment: string
-  is_anonymous: boolean
   created_at: string
-  user_name?: string
 }
-
-interface RatingCriteria {
-  name: string
-  key: 'quality' | 'value' | 'performance' | 'appearance'
-  icon: any
-  description: string
-}
-
-const ratingCriteria: RatingCriteria[] = [
-  {
-    name: 'Quality',
-    key: 'quality',
-    icon: Shield,
-    description: 'How would you rate the build quality and durability?'
-  },
-  {
-    name: 'Value for Money',
-    key: 'value',
-    icon: Sparkles,
-    description: 'Does the price match the quality and features?'
-  },
-  {
-    name: 'Performance',
-    key: 'performance',
-    icon: Zap,
-    description: 'How well does it perform its intended function?'
-  },
-  {
-    name: 'Appearance',
-    key: 'appearance',
-    icon: Eye,
-    description: 'How do you like the design and aesthetics?'
-  }
-]
 
 export default function ReviewsPage() {
   const router = useRouter()
   const [deliveredOrders, setDeliveredOrders] = useState<Order[]>([])
   const [loading, setLoading] = useState(true)
   const [selectedProduct, setSelectedProduct] = useState<any>(null)
-  const [ratings, setRatings] = useState({
-    quality: 0,
-    value: 0,
-    performance: 0,
-    appearance: 0
-  })
-  const [hoverRatings, setHoverRatings] = useState({
-    quality: 0,
-    value: 0,
-    performance: 0,
-    appearance: 0
-  })
+  const [rating, setRating] = useState(0)
+  const [hoverRating, setHoverRating] = useState(0)
   const [comment, setComment] = useState('')
-  const [isAnonymous, setIsAnonymous] = useState(false)
   const [submitting, setSubmitting] = useState(false)
   const [successMessage, setSuccessMessage] = useState<string | null>(null)
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
   const [existingReviews, setExistingReviews] = useState<Map<number, Review>>(new Map())
   const [showModal, setShowModal] = useState(false)
   const [userName, setUserName] = useState('')
+  const [productImages, setProductImages] = useState<Map<number, string>>(new Map())
 
   useEffect(() => {
     loadDeliveredOrders()
@@ -147,6 +88,25 @@ export default function ReviewsPage() {
           : profile.username || 'User'
         setUserName(name)
       }
+    }
+  }
+
+  const loadProductImages = async (productIds: number[]) => {
+    if (productIds.length === 0) return
+    
+    const { data: images, error } = await supabase
+      .from('product_images')
+      .select('product_id, image_url')
+      .in('product_id', productIds)
+
+    if (!error && images) {
+      const imageMap = new Map<number, string>()
+      images.forEach(img => {
+        if (!imageMap.has(img.product_id)) {
+          imageMap.set(img.product_id, img.image_url)
+        }
+      })
+      setProductImages(imageMap)
     }
   }
 
@@ -184,13 +144,45 @@ export default function ReviewsPage() {
         .eq('order_status', 'delivered')
         .order('delivered_at', { ascending: false })
 
-      if (ordersError) throw ordersError
+      if (ordersError) {
+        console.error('Orders error:', ordersError)
+        throw ordersError
+      }
+
+      if (!orders || orders.length === 0) {
+        setDeliveredOrders([])
+        setLoading(false)
+        return
+      }
+
+      // Transform orders to match Order interface
+      const transformedOrders: Order[] = orders.map(order => ({
+        id: order.id,
+        created_at: order.created_at,
+        delivered_at: order.delivered_at,
+        order_items: order.order_items.map((item: any) => ({
+          id: item.id,
+          product_id: item.product_id,
+          quantity: item.quantity,
+          price: item.price,
+          products: item.products && item.products.length > 0 ? item.products[0] : {
+            id: item.product_id,
+            name: 'Product',
+            slug: '',
+            brand: null
+          }
+        }))
+      }))
+
+      // Get all product IDs to fetch images
+      const productIds = transformedOrders.flatMap(order => 
+        order.order_items.map(item => item.product_id)
+      )
+
+      // Fetch product images
+      await loadProductImages(productIds)
 
       // Fetch existing reviews for these products
-      const productIds = orders?.flatMap(order => 
-        order.order_items.map(item => item.product_id)
-      ) || []
-
       if (productIds.length > 0) {
         const { data: reviews, error: reviewsError } = await supabase
           .from('reviews')
@@ -207,7 +199,7 @@ export default function ReviewsPage() {
         }
       }
 
-      setDeliveredOrders(orders || [])
+      setDeliveredOrders(transformedOrders)
     } catch (error) {
       console.error('Error loading delivered orders:', error)
       setErrorMessage('Failed to load orders. Please try again.')
@@ -225,37 +217,16 @@ export default function ReviewsPage() {
     }
     
     setSelectedProduct({ ...product, order_id: orderId })
-    setRatings({ quality: 0, value: 0, performance: 0, appearance: 0 })
+    setRating(0)
+    setHoverRating(0)
     setComment('')
-    setIsAnonymous(false)
     setShowModal(true)
   }
 
-  const updateRating = (criteria: keyof typeof ratings, value: number) => {
-    setRatings(prev => ({ ...prev, [criteria]: value }))
-  }
-
-  const calculateOverallRating = () => {
-    const total = ratings.quality + ratings.value + ratings.performance + ratings.appearance
-    return total / 4
-  }
-
   const submitReview = async () => {
-    // Validate all ratings
-    if (ratings.quality === 0) {
-      setErrorMessage('Please rate the product quality')
-      return
-    }
-    if (ratings.value === 0) {
-      setErrorMessage('Please rate the value for money')
-      return
-    }
-    if (ratings.performance === 0) {
-      setErrorMessage('Please rate the product performance')
-      return
-    }
-    if (ratings.appearance === 0) {
-      setErrorMessage('Please rate the product appearance')
+    // Validate rating
+    if (rating === 0) {
+      setErrorMessage('Please rate the product (1-5 stars)')
       return
     }
 
@@ -276,46 +247,37 @@ export default function ReviewsPage() {
       const { data: { session } } = await supabase.auth.getSession()
       if (!session) throw new Error('Not authenticated')
 
-      const overallRating = calculateOverallRating()
-
       const { error: reviewError } = await supabase
         .from('reviews')
         .insert({
           user_id: session.user.id,
           product_id: selectedProduct.id,
-          rating: overallRating,
-          quality_rating: ratings.quality,
-          value_rating: ratings.value,
-          performance_rating: ratings.performance,
-          appearance_rating: ratings.appearance,
+          rating: rating,
           comment: comment.trim(),
-          is_anonymous: isAnonymous,
           created_at: new Date().toISOString()
         })
 
-      if (reviewError) throw reviewError
+      if (reviewError) {
+        console.error('Review insert error:', reviewError)
+        throw reviewError
+      }
 
       // Add notification for admin about new review
       await supabase.from('notifications').insert({
+        user_id: session.user.id,
         title: 'New Product Review',
-        message: `${isAnonymous ? 'A customer' : userName} reviewed ${selectedProduct.name} with ${overallRating} stars`,
+        message: `${userName} reviewed ${selectedProduct.name} with ${rating} stars`,
         is_read: false,
-        created_at: new Date().toISOString()
+        type: 'review'
       })
 
       // Update local state
       const newReview: Review = {
         id: Date.now(),
         product_id: selectedProduct.id,
-        rating: overallRating,
-        quality_rating: ratings.quality,
-        value_rating: ratings.value,
-        performance_rating: ratings.performance,
-        appearance_rating: ratings.appearance,
+        rating: rating,
         comment: comment.trim(),
-        is_anonymous: isAnonymous,
-        created_at: new Date().toISOString(),
-        user_name: isAnonymous ? 'Anonymous' : userName
+        created_at: new Date().toISOString()
       }
       setExistingReviews(prev => new Map(prev).set(selectedProduct.id, newReview))
 
@@ -324,9 +286,8 @@ export default function ReviewsPage() {
       
       setShowModal(false)
       setSelectedProduct(null)
-      setRatings({ quality: 0, value: 0, performance: 0, appearance: 0 })
+      setRating(0)
       setComment('')
-      setIsAnonymous(false)
     } catch (error: any) {
       console.error('Error submitting review:', error)
       setErrorMessage(error.message || 'Failed to submit review. Please try again.')
@@ -337,22 +298,13 @@ export default function ReviewsPage() {
 
   const renderStars = (rating: number, size: string = 'w-5 h-5') => {
     const fullStars = Math.floor(rating)
-    const hasHalfStar = rating % 1 >= 0.5
-    const emptyStars = 5 - fullStars - (hasHalfStar ? 1 : 0)
+    const emptyStars = 5 - fullStars
 
     return (
       <div className="flex items-center gap-0.5">
         {[...Array(fullStars)].map((_, i) => (
           <Star key={`full-${i}`} className={`${size} fill-yellow-400 text-yellow-400`} />
         ))}
-        {hasHalfStar && (
-          <div className="relative">
-            <Star className={`${size} text-gray-300`} />
-            <div className="absolute inset-0 overflow-hidden w-1/2">
-              <Star className={`${size} fill-yellow-400 text-yellow-400`} />
-            </div>
-          </div>
-        )}
         {[...Array(emptyStars)].map((_, i) => (
           <Star key={`empty-${i}`} className={`${size} text-gray-300`} />
         ))}
@@ -360,12 +312,7 @@ export default function ReviewsPage() {
     )
   }
 
-  const renderInteractiveStars = (
-    rating: number, 
-    onRatingChange: (value: number) => void,
-    onHover: (value: number) => void,
-    hoverRating: number
-  ) => {
+  const renderInteractiveStars = () => {
     const displayRating = hoverRating || rating
     const stars = []
     for (let i = 1; i <= 5; i++) {
@@ -373,20 +320,20 @@ export default function ReviewsPage() {
         <button
           key={i}
           type="button"
-          onClick={() => onRatingChange(i)}
-          onMouseEnter={() => onHover(i)}
-          onMouseLeave={() => onHover(0)}
+          onClick={() => setRating(i)}
+          onMouseEnter={() => setHoverRating(i)}
+          onMouseLeave={() => setHoverRating(0)}
           className="cursor-pointer transition-transform hover:scale-110 focus:outline-none"
         >
           {i <= displayRating ? (
-            <Star className="w-6 h-6 fill-yellow-400 text-yellow-400" />
+            <Star className="w-8 h-8 fill-yellow-400 text-yellow-400" />
           ) : (
-            <Star className="w-6 h-6 text-gray-300" />
+            <Star className="w-8 h-8 text-gray-300" />
           )}
         </button>
       )
     }
-    return <div className="flex gap-1">{stars}</div>
+    return <div className="flex gap-1 justify-center">{stars}</div>
   }
 
   const formatDate = (dateString: string) => {
@@ -425,7 +372,7 @@ export default function ReviewsPage() {
 
         {/* Success Message */}
         {successMessage && (
-          <div className="mb-6 p-4 bg-green-100 border border-green-400 text-green-700 rounded-xl flex items-center gap-3 animate-in slide-in-from-top duration-300">
+          <div className="mb-6 p-4 bg-green-100 border border-green-400 text-green-700 rounded-xl flex items-center gap-3">
             <CheckCircle className="w-5 h-5" />
             <span>{successMessage}</span>
             <button onClick={() => setSuccessMessage(null)} className="ml-auto">
@@ -436,7 +383,7 @@ export default function ReviewsPage() {
 
         {/* Error Message */}
         {errorMessage && (
-          <div className="mb-6 p-4 bg-red-100 border border-red-400 text-red-700 rounded-xl flex items-center gap-3 animate-in slide-in-from-top duration-300">
+          <div className="mb-6 p-4 bg-red-100 border border-red-400 text-red-700 rounded-xl flex items-center gap-3">
             <AlertCircle className="w-5 h-5" />
             <span>{errorMessage}</span>
             <button onClick={() => setErrorMessage(null)} className="ml-auto">
@@ -489,16 +436,21 @@ export default function ReviewsPage() {
                   {order.order_items.map((item) => {
                     const hasReviewed = existingReviews.has(item.product_id)
                     const review = existingReviews.get(item.product_id)
+                    const productImage = productImages.get(item.product_id) || '/placeholder-product.png'
+                    
                     return (
                       <div key={item.id} className="p-6 hover:bg-gray-50 transition">
                         <div className="flex gap-4">
                           {/* Product Image */}
-                          <div className="w-24 h-24 bg-gray-100 rounded-lg flex items-center justify-center flex-shrink-0">
-                            {item.products.image ? (
-                              <img src={item.products.image} alt={item.products.name} className="w-full h-full object-cover rounded-lg" />
-                            ) : (
-                              <Package className="w-8 h-8 text-gray-400" />
-                            )}
+                          <div className="w-24 h-24 bg-gray-100 rounded-lg flex items-center justify-center shrink-0 overflow-hidden">
+                            <img 
+                              src={productImage} 
+                              alt={item.products.name} 
+                              className="w-full h-full object-cover"
+                              onError={(e) => {
+                                (e.target as HTMLImageElement).src = '/placeholder-product.png'
+                              }}
+                            />
                           </div>
 
                           {/* Product Info */}
@@ -512,7 +464,7 @@ export default function ReviewsPage() {
                                   <p className="text-sm text-gray-500 mt-1">Brand: {item.products.brand}</p>
                                 )}
                                 <p className="text-sm text-gray-500 mt-1">
-                                  Quantity: {item.quantity} × ₱{item.price.toLocaleString()}
+                                  Quantity: {item.quantity} × ₱{Number(item.price).toLocaleString()}
                                 </p>
                               </div>
 
@@ -543,20 +495,16 @@ export default function ReviewsPage() {
                             {hasReviewed && review && (
                               <div className="mt-4 p-4 bg-gray-50 rounded-lg">
                                 <div className="flex items-start gap-3">
-                                  <div className="flex-shrink-0">
+                                  <div className="shrink-0">
                                     <div className="w-10 h-10 rounded-full bg-gray-200 flex items-center justify-center">
-                                      {review.is_anonymous ? (
-                                        <Users className="w-5 h-5 text-gray-500" />
-                                      ) : (
-                                        <User className="w-5 h-5 text-gray-500" />
-                                      )}
+                                      <User className="w-5 h-5 text-gray-500" />
                                     </div>
                                   </div>
                                   <div className="flex-1">
                                     <div className="flex items-center justify-between flex-wrap gap-2">
                                       <div>
                                         <p className="font-medium text-gray-900">
-                                          {review.is_anonymous ? 'Anonymous' : userName}
+                                          {userName}
                                         </p>
                                         {renderStars(review.rating)}
                                       </div>
@@ -564,31 +512,7 @@ export default function ReviewsPage() {
                                         {formatDate(review.created_at)}
                                       </span>
                                     </div>
-                                    <div className="mt-2 grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs">
-                                      <div className="flex items-center gap-1">
-                                        <Shield className="w-3 h-3 text-yellow-500" />
-                                        <span>Quality: {review.quality_rating}/5</span>
-                                      </div>
-                                      <div className="flex items-center gap-1">
-                                        <Sparkles className="w-3 h-3 text-yellow-500" />
-                                        <span>Value: {review.value_rating}/5</span>
-                                      </div>
-                                      <div className="flex items-center gap-1">
-                                        <Zap className="w-3 h-3 text-yellow-500" />
-                                        <span>Performance: {review.performance_rating}/5</span>
-                                      </div>
-                                      <div className="flex items-center gap-1">
-                                        <Eye className="w-3 h-3 text-yellow-500" />
-                                        <span>Appearance: {review.appearance_rating}/5</span>
-                                      </div>
-                                    </div>
                                     <p className="text-gray-700 mt-2">{review.comment}</p>
-                                    {review.is_anonymous && (
-                                      <p className="text-xs text-gray-400 mt-2 flex items-center gap-1">
-                                        <HelpCircle className="w-3 h-3" />
-                                        Posted anonymously
-                                      </p>
-                                    )}
                                   </div>
                                 </div>
                               </div>
@@ -607,7 +531,7 @@ export default function ReviewsPage() {
         {/* Review Modal */}
         {showModal && selectedProduct && (
           <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-            <div className="bg-white rounded-2xl max-w-2xl w-full max-h-[90vh] overflow-y-auto">
+            <div className="bg-white rounded-2xl max-w-md w-full max-h-[90vh] overflow-y-auto">
               <div className="sticky top-0 bg-white border-b border-gray-200 px-6 py-4 flex justify-between items-center">
                 <h2 className="text-xl font-bold text-gray-900">Write a Review</h2>
                 <button
@@ -627,47 +551,15 @@ export default function ReviewsPage() {
                   )}
                 </div>
 
-                {/* Rating Criteria */}
-                <div className="mb-6 space-y-6">
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-3">
-                      Overall Rating <span className="text-red-500">*</span>
-                    </label>
-                    <div className="bg-gray-50 p-4 rounded-lg">
-                      {ratingCriteria.map((criteria) => (
-                        <div key={criteria.key} className="mb-4 last:mb-0">
-                          <div className="flex items-center justify-between mb-2">
-                            <div className="flex items-center gap-2">
-                              <criteria.icon className="w-4 h-4 text-yellow-500" />
-                              <span className="text-sm font-medium text-gray-700">{criteria.name}</span>
-                            </div>
-                            <div className="flex gap-1">
-                              {renderInteractiveStars(
-                                ratings[criteria.key],
-                                (value) => updateRating(criteria.key, value),
-                                (value) => setHoverRatings(prev => ({ ...prev, [criteria.key]: value })),
-                                hoverRatings[criteria.key]
-                              )}
-                            </div>
-                          </div>
-                          <p className="text-xs text-gray-500">{criteria.description}</p>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-
-                  {/* Overall Rating Display */}
-                  <div className="bg-yellow-50 p-4 rounded-lg border border-yellow-200">
-                    <div className="flex items-center justify-between">
-                      <span className="text-sm font-medium text-gray-700">Overall Rating:</span>
-                      <div className="flex items-center gap-2">
-                        {renderStars(calculateOverallRating(), 'w-5 h-5')}
-                        <span className="text-sm font-semibold text-gray-900">
-                          {calculateOverallRating().toFixed(1)} / 5.0
-                        </span>
-                      </div>
-                    </div>
-                  </div>
+                {/* Rating Stars */}
+                <div className="mb-6 text-center">
+                  <label className="block text-sm font-medium text-gray-700 mb-3">
+                    Overall Rating <span className="text-red-500">*</span>
+                  </label>
+                  {renderInteractiveStars()}
+                  <p className="text-xs text-gray-500 mt-2">
+                    Click on the stars to rate (1 = Poor, 5 = Excellent)
+                  </p>
                 </div>
 
                 {/* Review Comment */}
@@ -680,7 +572,7 @@ export default function ReviewsPage() {
                     onChange={(e) => setComment(e.target.value)}
                     rows={5}
                     className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-yellow-400 focus:border-transparent resize-none"
-                    placeholder="Share your detailed experience with this product... What did you like or dislike? Would you recommend it to others?"
+                    placeholder="Share your experience with this product... What did you like or dislike?"
                   />
                   <div className="flex justify-between items-center mt-1">
                     <p className="text-xs text-gray-500">
@@ -692,29 +584,11 @@ export default function ReviewsPage() {
                   </div>
                 </div>
 
-                {/* Anonymous Option */}
-                <div className="mb-6">
-                  <label className="flex items-center gap-3 cursor-pointer">
-                    <input
-                      type="checkbox"
-                      checked={isAnonymous}
-                      onChange={(e) => setIsAnonymous(e.target.checked)}
-                      className="w-4 h-4 text-yellow-500 rounded border-gray-300 focus:ring-yellow-400"
-                    />
-                    <div>
-                      <span className="text-sm font-medium text-gray-700">Post anonymously</span>
-                      <p className="text-xs text-gray-500 mt-1">
-                        Your name will not be shown publicly with this review
-                      </p>
-                    </div>
-                  </label>
-                </div>
-
                 {/* Tips */}
                 <div className="mb-6 p-3 bg-blue-50 rounded-lg border border-blue-100">
                   <p className="text-xs text-blue-700 flex items-center gap-2">
                     <HelpCircle className="w-4 h-4" />
-                    <strong>Review Tips:</strong> Be specific about your experience, mention what you liked or disliked, and include details about product quality, performance, and value.
+                    <strong>Review Tips:</strong> Be specific about your experience, mention what you liked or disliked.
                   </p>
                 </div>
 

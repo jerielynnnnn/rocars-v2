@@ -112,11 +112,12 @@ export default function SignUpPage() {
         email: form.email,
         password: form.password,
         options: {
-          emailRedirectTo: `${window.location.origin}/auth/callback`,
+          emailRedirectTo: `${window.location.origin}/auth/callback?redirect=${encodeURIComponent('/login?verified=true')}`,
           data: {
             username: form.username,
             first_name: form.firstName,
             last_name: form.lastName,
+            provider: 'email',
           },
         },
       })
@@ -156,7 +157,7 @@ export default function SignUpPage() {
         type: 'signup',
         email: registeredEmail,
         options: {
-          emailRedirectTo: `${window.location.origin}/auth/callback`,
+          emailRedirectTo: `${window.location.origin}/auth/callback?redirect=${encodeURIComponent('/login?verified=true')}`,
         },
       })
 
@@ -177,7 +178,7 @@ export default function SignUpPage() {
     const { error } = await supabase.auth.signInWithOAuth({
       provider: 'google',
       options: {
-        redirectTo: `${window.location.origin}/auth/callback?redirect=/`,
+        redirectTo: `${window.location.origin}/auth/callback?redirect=${encodeURIComponent('/register/google')}`,
       },
     })
 
@@ -204,9 +205,9 @@ export default function SignUpPage() {
                 </div>
                 
                 <div className="my-8">
-                  <div className="relative w-full h-90">
+                  <div className="relative w-full h-64">
                     <img
-                      src="/logo.png"
+                      src="/sign.png"
                       alt="ROCARS Automotive"
                       className="w-full h-full object-contain"
                     />

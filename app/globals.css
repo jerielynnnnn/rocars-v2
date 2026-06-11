@@ -15,6 +15,17 @@ body {
   font-family: Arial, Helvetica, sans-serif;
 }
 
+body.a11y-text-small,
+body.a11y-text-default,
+body.a11y-text-large,
+body.a11y-text-xlarge {
+  font-size: 1rem;
+}
+
+body.spacious-reading :where(p, li, label, input, textarea, select, button, td, th) {
+  line-height: 1.9 !important;
+}
+
 /* Admin dark theme support */
 .admin-dark {
   background: #0a0a0a;
@@ -67,4 +78,127 @@ select {
 
 .animate-fade-in {
   animation: fade-in 0.3s ease-out;
+}
+
+body.reduce-motion *,
+body.reduce-motion *::before,
+body.reduce-motion *::after {
+  animation-duration: 0.001ms !important;
+  animation-iteration-count: 1 !important;
+  scroll-behavior: auto !important;
+  transition-duration: 0.001ms !important;
+}
+
+body.high-contrast {
+  --background: #ffffff;
+  --foreground: #000000;
+  background: #ffffff !important;
+  color: #000000 !important;
+}
+
+body.high-contrast :where(main, section, article, aside, header, footer),
+body.high-contrast :where(.bg-white, .bg-gray-50, .bg-gray-100, .bg-\[\#f6f6f4\], .bg-\[\#f5f5f5\]) {
+  background-color: #ffffff !important;
+  color: #000000 !important;
+}
+
+body.high-contrast :where(.text-gray-400, .text-gray-500, .text-gray-600, .text-gray-700, .text-gray-800, .text-gray-900, .text-black) {
+  color: #000000 !important;
+}
+
+body.high-contrast :where(.border-gray-100, .border-gray-200, .border-gray-300) {
+  border-color: #000000 !important;
+}
+
+body.high-contrast input,
+body.high-contrast textarea,
+body.high-contrast select {
+  background-color: #ffffff !important;
+  border-color: #000000 !important;
+  color: #000000 !important;
+}
+
+body.high-contrast a,
+body.high-contrast button {
+  outline-color: #000000 !important;
+}
+
+body.yellow-mode {
+  --background: #fff8c5;
+  --foreground: #111111;
+  background: #fff8c5 !important;
+  color: #111111 !important;
+}
+
+body.yellow-mode :where(main, section, article, aside, header, footer),
+body.yellow-mode :where(.bg-white, .bg-gray-50, .bg-gray-100, .bg-\[\#f6f6f4\], .bg-\[\#f5f5f5\]) {
+  background-color: #fff8c5 !important;
+  color: #111111 !important;
+}
+
+body.yellow-mode :where(.text-gray-400, .text-gray-500, .text-gray-600, .text-gray-700, .text-gray-800, .text-gray-900, .text-black) {
+  color: #111111 !important;
+}
+
+body.yellow-mode input,
+body.yellow-mode textarea,
+body.yellow-mode select {
+  background-color: #fffde7 !important;
+  border-color: #854d0e !important;
+  color: #111111 !important;
+}
+
+body.dark-mode {
+  --background: #111111;
+  --foreground: #f6f6f6;
+  background: #111111 !important;
+  color: #f6f6f6 !important;
+}
+
+body.dark-mode main,
+body.dark-mode section,
+body.dark-mode article,
+body.dark-mode aside,
+body.dark-mode header,
+body.dark-mode footer {
+  background-color: #111111 !important;
+  color: #f6f6f6 !important;
+}
+
+body.dark-mode .bg-white,
+body.dark-mode .bg-gray-50,
+body.dark-mode .bg-gray-100,
+body.dark-mode .bg-\[\#f6f6f4\],
+body.dark-mode .bg-\[\#f5f5f5\] {
+  background-color: #1f1f1f !important;
+  color: #f6f6f6 !important;
+}
+
+body.dark-mode .text-black,
+body.dark-mode .text-gray-900,
+body.dark-mode .text-gray-800 {
+  color: #f6f6f6 !important;
+}
+
+body.dark-mode .text-gray-600,
+body.dark-mode .text-gray-500,
+body.dark-mode .text-gray-400 {
+  color: #d4d4d4 !important;
+}
+
+body.dark-mode :where(.border-gray-100, .border-gray-200, .border-gray-300) {
+  border-color: #525252 !important;
+}
+
+body.dark-mode input,
+body.dark-mode textarea,
+body.dark-mode select {
+  background-color: #1f1f1f !important;
+  color: #f6f6f6 !important;
+  border-color: #525252 !important;
+}
+
+body :focus-visible {
+  outline: 3px solid #facc15;
+  outline-offset: 3px;
 }

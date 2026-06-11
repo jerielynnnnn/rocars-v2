@@ -16,28 +16,32 @@ export default function GoogleRegisterPage() {
     lastName: '',
     avatar: '',
     username: '',
-    password: '',
-    confirmPassword: '',
   })
+
+  const [userId, setUserId] = useState<string | null>(null)
 
   useEffect(() => {
     const loadGoogleUser = async () => {
       const {
-        data: { user },
-      } = await supabase.auth.getUser()
+        data: { session },
+      } = await supabase.auth.getSession()
+
+      const user = session?.user
 
       if (!user) {
         router.push('/login')
         return
       }
 
+      setUserId(user.id)
+
+      const fullName = user.user_metadata?.full_name || ''
+
       setForm((prev) => ({
         ...prev,
         email: user.email || '',
-        firstName:
-          user.user_metadata?.full_name?.split(' ')[0] || '',
-        lastName:
-          user.user_metadata?.full_name?.split(' ').slice(1).join(' ') || '',
+        firstName: fullName.split(' ')[0] || '',
+        lastName: fullName.split(' ').slice(1).join(' ') || '',
         avatar: user.user_metadata?.avatar_url || '',
       }))
     }
@@ -50,31 +54,39 @@ export default function GoogleRegisterPage() {
     setError('')
 
     try {
-      if (form.password !== form.confirmPassword) {
-        throw new Error('Passwords do not match')
+      if (!userId) throw new Error('User session not found')
+
+      if (!form.username) {
+        throw new Error('Username is required')
       }
 
-      // Update password for OAuth account
-      const { error: passwordError } =
-        await supabase.auth.updateUser({
-          password: form.password,
-          data: {
-            username: form.username,
-            first_name: form.firstName,
-            last_name: form.lastName,
-            avatar_url: form.avatar,
-          },
-        })
+      const {
+        data: { session },
+      } = await supabase.auth.getSession()
 
-      if (passwordError) throw passwordError
+      if (!session) {
+        throw new Error('User session not found')
+      }
 
-      // OPTIONAL:
-      // Send email verification manually
-      // if you want secondary verification
+      const response = await fetch('/api/auth/complete-google-profile', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${session.access_token}`,
+        },
+        body: JSON.stringify(form),
+      })
+
+      const result = await response.json()
+
+      if (!response.ok) {
+        throw new Error(result.error || 'Failed to complete registration')
+      }
 
       router.push('/')
     } catch (err: any) {
-      setError(err.message)
+      console.error(err)
+      setError(err.message || 'Something went wrong')
     } finally {
       setLoading(false)
     }
@@ -105,33 +117,28 @@ export default function GoogleRegisterPage() {
           />
 
           <input
+            placeholder="First Name"
+            value={form.firstName}
+            onChange={(e) =>
+              setForm({ ...form, firstName: e.target.value })
+            }
+            className="w-full border rounded-2xl px-4 py-3"
+          />
+
+          <input
+            placeholder="Last Name"
+            value={form.lastName}
+            onChange={(e) =>
+              setForm({ ...form, lastName: e.target.value })
+            }
+            className="w-full border rounded-2xl px-4 py-3"
+          />
+
+          <input
             placeholder="Username"
             value={form.username}
             onChange={(e) =>
               setForm({ ...form, username: e.target.value })
-            }
-            className="w-full border rounded-2xl px-4 py-3"
-          />
-
-          <input
-            type="password"
-            placeholder="Create Password"
-            value={form.password}
-            onChange={(e) =>
-              setForm({ ...form, password: e.target.value })
-            }
-            className="w-full border rounded-2xl px-4 py-3"
-          />
-
-          <input
-            type="password"
-            placeholder="Confirm Password"
-            value={form.confirmPassword}
-            onChange={(e) =>
-              setForm({
-                ...form,
-                confirmPassword: e.target.value,
-              })
             }
             className="w-full border rounded-2xl px-4 py-3"
           />

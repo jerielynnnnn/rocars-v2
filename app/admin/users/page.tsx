@@ -21,7 +21,9 @@ import {
   Star,
   ShoppingBag,
   DollarSign,
-  Heart
+  Heart,
+  Trash2,
+  XCircle as XCircleIcon
 } from 'lucide-react';
 import Link from 'next/link';
 
@@ -64,8 +66,22 @@ export default function UsersPage() {
   const [userStats, setUserStats] = useState<UserStats | null>(null);
   const [showActionMenu, setShowActionMenu] = useState<string | null>(null);
   const [updating, setUpdating] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  const [selectedUsersForDelete, setSelectedUsersForDelete] = useState<string[]>([]);
+  const [currentAdminId, setCurrentAdminId] = useState<string | null>(null);
   
   const itemsPerPage = 10;
+
+  useEffect(() => {
+    // Get current admin user ID
+    const getCurrentAdmin = async () => {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (user) {
+        setCurrentAdminId(user.id);
+      }
+    };
+    getCurrentAdmin();
+  }, []);
 
   useEffect(() => {
     fetchUsers();
@@ -74,9 +90,11 @@ export default function UsersPage() {
   const fetchUsers = async () => {
     setLoading(true);
     try {
+      // Build query - EXCLUDE admin users from the list
       let query = supabase
         .from('profiles')
-        .select('*', { count: 'exact' });
+        .select('*', { count: 'exact' })
+        .neq('role', 'admin'); // 🔥 CRITICAL: Exclude all admin users
 
       if (roleFilter !== 'all') {
         query = query.eq('role', roleFilter);
@@ -206,6 +224,167 @@ export default function UsersPage() {
     }
   };
 
+  const handleDeleteUser = async (userId: string, userName: string) => {
+    // Prevent deleting current admin
+    if (userId === currentAdminId) {
+      alert("⚠️ You cannot delete your own admin account!");
+      return;
+    }
+
+    if (!confirm(`⚠️ WARNING: You are about to permanently delete ${userName}. This action CANNOT be undone. All user data including orders, reviews, and wishlist items will be lost. Continue?`)) {
+      return;
+    }
+
+    setDeleting(true);
+    
+    try {
+      // Try to delete from Auth (this will fail if user doesn't exist in Auth)
+      let authDeleted = false;
+      try {
+        const { error: authError } = await supabase.auth.admin.deleteUser(userId);
+        if (!authError) {
+          authDeleted = true;
+          console.log(`User ${userId} deleted from Auth`);
+        }
+        if (authError?.message?.includes('User not found')) {
+          console.log(`User ${userId} not found in Auth, continuing with profile deletion`);
+        }
+      } catch (authErr: any) {
+        console.log(`Auth deletion failed for ${userId}: ${authErr.message}`);
+      }
+      
+      // Delete from profiles table
+      const { error: profileError } = await supabase
+        .from('profiles')
+        .delete()
+        .eq('id', userId);
+      
+      if (profileError) {
+        console.error('Profile deletion error:', profileError);
+        throw new Error(`Failed to delete from profiles: ${profileError.message}`);
+      }
+      
+      // Delete related data
+      try {
+        await supabase.from('reviews').delete().eq('user_id', userId);
+        await supabase.from('wishlists').delete().eq('user_id', userId);
+        await supabase.from('addresses').delete().eq('user_id', userId);
+        await supabase.from('notifications').delete().eq('user_id', userId);
+        console.log(`Related data deleted for user ${userId}`);
+      } catch (relatedError) {
+        console.log('Error deleting related data (non-critical):', relatedError);
+      }
+      
+      const message = authDeleted 
+        ? `✅ ${userName} deleted successfully from Auth and Profiles`
+        : `✅ ${userName} removed from profiles (Auth user didn't exist)`;
+      
+      alert(message);
+      
+      await fetchUsers();
+      setSelectedUsersForDelete(prev => prev.filter(id => id !== userId));
+      
+      if (selectedUser && selectedUser.id === userId) {
+        setShowUserModal(false);
+        setSelectedUser(null);
+      }
+      
+    } catch (error: any) {
+      console.error('Delete error:', error);
+      alert(`❌ Failed to delete user: ${error.message}`);
+    } finally {
+      setDeleting(false);
+    }
+  };
+
+  const handleBulkDelete = async () => {
+    if (selectedUsersForDelete.length === 0) {
+      alert('Please select users to delete');
+      return;
+    }
+    
+    // Check if trying to delete current admin
+    if (selectedUsersForDelete.includes(currentAdminId || '')) {
+      alert("⚠️ You cannot delete your own admin account! Please remove it from the selection.");
+      return;
+    }
+    
+    if (!confirm(`⚠️ WARNING: You are about to permanently delete ${selectedUsersForDelete.length} selected user(s). This action CANNOT be undone. Continue?`)) {
+      return;
+    }
+    
+    setDeleting(true);
+    const results = {
+      success: [] as string[],
+      failed: [] as { id: string; error: string }[]
+    };
+    
+    for (const userId of selectedUsersForDelete) {
+      try {
+        try {
+          await supabase.auth.admin.deleteUser(userId);
+        } catch (authErr: any) {
+          console.log(`Auth user ${userId} not found, continuing with profile deletion`);
+        }
+        
+        const { error: profileError } = await supabase
+          .from('profiles')
+          .delete()
+          .eq('id', userId);
+        
+        if (profileError) throw new Error(profileError.message);
+        
+        await supabase.from('reviews').delete().eq('user_id', userId);
+        await supabase.from('wishlists').delete().eq('user_id', userId);
+        await supabase.from('addresses').delete().eq('user_id', userId);
+        await supabase.from('notifications').delete().eq('user_id', userId);
+        
+        results.success.push(userId);
+      } catch (error: any) {
+        results.failed.push({ id: userId, error: error.message });
+      }
+    }
+    
+    let message = `✅ Successfully deleted: ${results.success.length} users\n`;
+    if (results.failed.length > 0) {
+      message += `❌ Failed: ${results.failed.length} users\n`;
+      results.failed.slice(0, 3).forEach(f => {
+        message += `  - ${f.id.slice(0, 8)}...: ${f.error}\n`;
+      });
+      if (results.failed.length > 3) {
+        message += `  - and ${results.failed.length - 3} more...\n`;
+      }
+    }
+    alert(message);
+    
+    setSelectedUsersForDelete([]);
+    await fetchUsers();
+    setDeleting(false);
+  };
+
+  const toggleUserSelection = (userId: string) => {
+    // Prevent selecting admin user for deletion
+    const user = users.find(u => u.id === userId);
+    if (user?.role === 'admin') {
+      alert("Admin users cannot be deleted from this panel");
+      return;
+    }
+    setSelectedUsersForDelete(prev => 
+      prev.includes(userId) 
+        ? prev.filter(id => id !== userId)
+        : [...prev, userId]
+    );
+  };
+
+  const selectAllUsers = () => {
+    const selectableUsers = filteredUsers.filter(u => u.role !== 'admin');
+    if (selectedUsersForDelete.length === selectableUsers.length && selectableUsers.length > 0) {
+      setSelectedUsersForDelete([]);
+    } else {
+      setSelectedUsersForDelete(selectableUsers.map(u => u.id));
+    }
+  };
+
   const filteredUsers = users.filter(user => {
     const searchLower = searchTerm.toLowerCase();
     return (
@@ -254,6 +433,10 @@ export default function UsersPage() {
     }
   };
 
+  // User count display (excluding admins)
+  const totalUsersCount = users.filter(u => u.role !== 'admin').length;
+  const filteredCount = filteredUsers.filter(u => u.role !== 'admin').length;
+
   if (loading && users.length === 0) {
     return (
       <div className="flex items-center justify-center h-96">
@@ -264,6 +447,48 @@ export default function UsersPage() {
 
   return (
     <div className="space-y-6">
+      {/* Header with User Count */}
+      <div className="flex items-center justify-between">
+        <div>
+          <h1 className="text-2xl font-bold text-gray-900">User Management</h1>
+          <p className="text-sm text-gray-500 mt-1">
+            Manage customers and staff members ({totalUsersCount} total users)
+          </p>
+        </div>
+      </div>
+
+      {/* Bulk Delete Bar */}
+      {selectedUsersForDelete.length > 0 && (
+        <div className="bg-red-50 border border-red-200 rounded-xl p-4 flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <input
+              type="checkbox"
+              checked={selectedUsersForDelete.length === filteredUsers.filter(u => u.role !== 'admin').length && filteredUsers.filter(u => u.role !== 'admin').length > 0}
+              onChange={selectAllUsers}
+              className="rounded border-red-300"
+            />
+            <span className="text-sm text-red-700 font-medium">
+              {selectedUsersForDelete.length} user(s) selected for deletion
+            </span>
+          </div>
+          <div className="flex gap-2">
+            <button
+              onClick={() => setSelectedUsersForDelete([])}
+              className="px-4 py-2 text-sm text-gray-600 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors"
+            >
+              Cancel
+            </button>
+            <button
+              onClick={handleBulkDelete}
+              disabled={deleting}
+              className="px-4 py-2 text-sm bg-red-600 text-white rounded-lg hover:bg-red-700 transition-colors disabled:opacity-50 flex items-center gap-2"
+            >
+              {deleting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Trash2 className="h-4 w-4" />}
+              Delete Selected
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* Filters Bar */}
       <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-4">
@@ -288,7 +513,6 @@ export default function UsersPage() {
               <option value="all">All Roles</option>
               <option value="customer">Customers</option>
               <option value="staff">Staff</option>
-              <option value="admin">Admins</option>
             </select>
 
             <select
@@ -310,6 +534,15 @@ export default function UsersPage() {
           <table className="w-full">
             <thead className="bg-gray-50 border-b">
               <tr>
+                <th className="text-left px-6 py-3 text-xs font-medium text-gray-500 uppercase tracking-wider w-12">
+                  <input
+                    type="checkbox"
+                    onChange={selectAllUsers}
+                    checked={filteredUsers.filter(u => u.role !== 'admin').length > 0 && 
+                            selectedUsersForDelete.length === filteredUsers.filter(u => u.role !== 'admin').length}
+                    className="rounded border-gray-300"
+                  />
+                </th>
                 <th className="text-left px-6 py-3 text-xs font-medium text-gray-500 uppercase tracking-wider">User</th>
                 <th className="text-left px-6 py-3 text-xs font-medium text-gray-500 uppercase tracking-wider">Contact</th>
                 <th className="text-left px-6 py-3 text-xs font-medium text-gray-500 uppercase tracking-wider">Role</th>
@@ -322,6 +555,15 @@ export default function UsersPage() {
             <tbody className="divide-y divide-gray-100">
               {filteredUsers.map((user) => (
                 <tr key={user.id} className="hover:bg-gray-50 transition-colors">
+                  <td className="px-6 py-4">
+                    <input
+                      type="checkbox"
+                      checked={selectedUsersForDelete.includes(user.id)}
+                      onChange={() => toggleUserSelection(user.id)}
+                      disabled={user.role === 'admin'}
+                      className="rounded border-gray-300 disabled:opacity-50 disabled:cursor-not-allowed"
+                    />
+                   </td>
                   <td className="px-6 py-4">
                     <div className="flex items-center gap-3">
                       <div className="h-10 w-10 rounded-full bg-gray-200 flex items-center justify-center overflow-hidden">
@@ -339,7 +581,7 @@ export default function UsersPage() {
                         <p className="text-sm text-gray-500">@{user.username}</p>
                       </div>
                     </div>
-                  </td>
+                   </td>
                   <td className="px-6 py-4">
                     <div className="space-y-1">
                       <div className="flex items-center gap-1 text-sm text-gray-600">
@@ -353,12 +595,12 @@ export default function UsersPage() {
                         </div>
                       )}
                     </div>
-                  </td>
+                   </td>
                   <td className="px-6 py-4">
                     <span className={`px-2 py-1 rounded-full text-xs font-medium ${getRoleBadgeColor(user.role)}`}>
                       {user.role.charAt(0).toUpperCase() + user.role.slice(1)}
                     </span>
-                  </td>
+                   </td>
                   <td className="px-6 py-4">
                     <div className="flex items-center gap-2">
                       {user.is_active ? (
@@ -378,20 +620,32 @@ export default function UsersPage() {
                         </span>
                       )}
                     </div>
-                  </td>
+                   </td>
                   <td className="px-6 py-4 text-sm text-gray-500">
                     {formatDate(user.created_at)}
-                  </td>
+                   </td>
                   <td className="px-6 py-4 text-sm text-gray-500">
                     {formatDate(user.last_login)}
-                  </td>
+                   </td>
                   <td className="px-6 py-4 text-right relative">
-                    <button
-                      onClick={() => setShowActionMenu(showActionMenu === user.id ? null : user.id)}
-                      className="p-2 hover:bg-gray-100 rounded-lg transition-colors"
-                    >
-                      <MoreVertical className="h-5 w-5 text-gray-500" />
-                    </button>
+                    <div className="flex items-center justify-end gap-2">
+                      {user.role !== 'admin' && (
+                        <button
+                          onClick={() => handleDeleteUser(user.id, `${user.first_name} ${user.last_name}`)}
+                          disabled={deleting || user.id === currentAdminId}
+                          className="p-2 text-red-600 hover:bg-red-50 rounded-lg transition-colors disabled:opacity-50"
+                          title="Delete User"
+                        >
+                          <Trash2 className="h-4 w-4" />
+                        </button>
+                      )}
+                      <button
+                        onClick={() => setShowActionMenu(showActionMenu === user.id ? null : user.id)}
+                        className="p-2 hover:bg-gray-100 rounded-lg transition-colors"
+                      >
+                        <MoreVertical className="h-5 w-5 text-gray-500" />
+                      </button>
+                    </div>
                     
                     {showActionMenu === user.id && (
                       <div className="absolute right-6 mt-2 w-48 bg-white rounded-lg shadow-lg border border-gray-200 z-10">
@@ -403,40 +657,50 @@ export default function UsersPage() {
                             <Eye className="h-4 w-4" />
                             View Details
                           </button>
-                          <button
-                            onClick={() => handleToggleUserStatus(user.id, user.is_active)}
-                            className="w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-50 flex items-center gap-2"
-                          >
-                            {user.is_active ? (
-                              <>
-                                <Ban className="h-4 w-4" />
-                                Deactivate User
-                              </>
-                            ) : (
-                              <>
-                                <UserCheck className="h-4 w-4" />
-                                Activate User
-                              </>
-                            )}
-                          </button>
                           {user.role !== 'admin' && (
-                            <button
-                              onClick={() => handleChangeRole(user.id, user.role === 'customer' ? 'staff' : 'customer')}
-                              className="w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-50 flex items-center gap-2"
-                            >
-                              <Shield className="h-4 w-4" />
-                              Make {user.role === 'customer' ? 'Staff' : 'Customer'}
-                            </button>
+                            <>
+                              <button
+                                onClick={() => handleToggleUserStatus(user.id, user.is_active)}
+                                className="w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-50 flex items-center gap-2"
+                              >
+                                {user.is_active ? (
+                                  <>
+                                    <Ban className="h-4 w-4" />
+                                    Deactivate User
+                                  </>
+                                ) : (
+                                  <>
+                                    <UserCheck className="h-4 w-4" />
+                                    Activate User
+                                  </>
+                                )}
+                              </button>
+                              <button
+                                onClick={() => handleChangeRole(user.id, user.role === 'customer' ? 'staff' : 'customer')}
+                                className="w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-50 flex items-center gap-2"
+                              >
+                                <Shield className="h-4 w-4" />
+                                Make {user.role === 'customer' ? 'Staff' : 'Customer'}
+                              </button>
+                              <hr className="my-1 border-gray-100" />
+                              <button
+                                onClick={() => handleDeleteUser(user.id, `${user.first_name} ${user.last_name}`)}
+                                className="w-full text-left px-4 py-2 text-sm text-red-600 hover:bg-red-50 flex items-center gap-2"
+                              >
+                                <Trash2 className="h-4 w-4" />
+                                Delete User
+                              </button>
+                            </>
                           )}
                         </div>
                       </div>
                     )}
-                  </td>
-                </tr>
+                   </td>
+                  </tr>
               ))}
               {filteredUsers.length === 0 && (
                 <tr>
-                  <td colSpan={7} className="px-6 py-12 text-center text-gray-500">
+                  <td colSpan={8} className="px-6 py-12 text-center text-gray-500">
                     <Users className="h-12 w-12 text-gray-300 mx-auto mb-3" />
                     <p>No users found</p>
                     {searchTerm && (
@@ -458,7 +722,7 @@ export default function UsersPage() {
         {totalPages > 1 && (
           <div className="px-6 py-4 border-t border-gray-100 flex items-center justify-between">
             <p className="text-sm text-gray-500">
-              Page {currentPage} of {totalPages}
+              Page {currentPage} of {totalPages} ({totalUsersCount} total users)
             </p>
             <div className="flex gap-2">
               <button
@@ -480,7 +744,7 @@ export default function UsersPage() {
         )}
       </div>
 
-      {/* User Details Modal */}
+      {/* User Details Modal - Same as before but with admin restrictions */}
       {showUserModal && selectedUser && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
           <div className="bg-white rounded-xl max-w-2xl w-full max-h-[90vh] overflow-y-auto">
@@ -490,7 +754,7 @@ export default function UsersPage() {
                 onClick={() => setShowUserModal(false)}
                 className="p-1 hover:bg-gray-100 rounded-lg transition-colors"
               >
-                <XCircle className="h-6 w-6" />
+                <XCircleIcon className="h-6 w-6" />
               </button>
             </div>
 
@@ -587,7 +851,7 @@ export default function UsersPage() {
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   <div>
                     <p className="text-xs text-gray-500">User ID</p>
-                    <p className="text-sm font-mono text-xs">{selectedUser.id}</p>
+                    <p className="text-sm font-mono text-xs break-all">{selectedUser.id}</p>
                   </div>
                   <div>
                     <p className="text-xs text-gray-500">Username</p>
@@ -614,29 +878,37 @@ export default function UsersPage() {
                 </div>
               </div>
 
-              {/* Actions */}
-              <div className="flex gap-3 mt-6 pt-4 border-t border-gray-100">
-                <Link
-                  href={`/admin/users/${selectedUser.id}/orders`}
-                  className="flex-1 px-4 py-2 border border-gray-300 rounded-lg text-center hover:bg-gray-50 transition-colors"
-                >
-                  View Orders
-                </Link>
-                <button
-                  onClick={() => handleToggleUserStatus(selectedUser.id, selectedUser.is_active)}
-                  className="flex-1 px-4 py-2 border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors"
-                >
-                  {selectedUser.is_active ? 'Deactivate User' : 'Activate User'}
-                </button>
-                {selectedUser.role !== 'admin' && (
+              {/* Actions - Hide for admin users */}
+              {selectedUser.role !== 'admin' && (
+                <div className="flex gap-3 mt-6 pt-4 border-t border-gray-100">
+                  <Link
+                    href={`/admin/users/${selectedUser.id}/orders`}
+                    className="flex-1 px-4 py-2 border border-gray-300 rounded-lg text-center hover:bg-gray-50 transition-colors"
+                  >
+                    View Orders
+                  </Link>
+                  <button
+                    onClick={() => handleToggleUserStatus(selectedUser.id, selectedUser.is_active)}
+                    className="flex-1 px-4 py-2 border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors"
+                  >
+                    {selectedUser.is_active ? 'Deactivate User' : 'Activate User'}
+                  </button>
                   <button
                     onClick={() => handleChangeRole(selectedUser.id, selectedUser.role === 'customer' ? 'staff' : 'customer')}
                     className="flex-1 px-4 py-2 bg-black text-white rounded-lg hover:bg-gray-800 transition-colors"
                   >
                     Make {selectedUser.role === 'customer' ? 'Staff' : 'Customer'}
                   </button>
-                )}
-              </div>
+                  <button
+                    onClick={() => handleDeleteUser(selectedUser.id, `${selectedUser.first_name} ${selectedUser.last_name}`)}
+                    disabled={deleting}
+                    className="flex-1 px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 transition-colors flex items-center justify-center gap-2"
+                  >
+                    {deleting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Trash2 className="h-4 w-4" />}
+                    Delete User
+                  </button>
+                </div>
+              )}
             </div>
           </div>
         </div>

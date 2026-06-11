@@ -19,33 +19,146 @@ export default function ResetPasswordPage() {
   useEffect(() => {
     const verifyLink = async () => {
       try {
-        const token_hash = searchParams.get('token_hash')
-        const type = searchParams.get('type')
-        
-        if (!token_hash || !type) {
-          setPageState('error')
-          setError('Invalid reset link. Please request a new one.')
-          return
+        const rawSearch = typeof window !== 'undefined' ? window.location.search : ''
+        const rawHash = typeof window !== 'undefined' ? window.location.hash : ''
+        const paramSource = new URLSearchParams(rawSearch)
+
+        if (rawHash.startsWith('#')) {
+          const hashParams = new URLSearchParams(rawHash.slice(1))
+          for (const [key, value] of hashParams.entries()) {
+            if (!paramSource.has(key)) {
+              paramSource.set(key, value)
+            }
+          }
         }
-        
-        // Verify the OTP - this will create a session
-        const { error: verifyError } = await supabase.auth.verifyOtp({
-          token_hash,
-          type: type as any,
+
+        const tokenHash = searchParams.get('token_hash') || paramSource.get('token_hash')
+        const type = searchParams.get('type') || paramSource.get('type')
+        const accessToken = searchParams.get('access_token') || paramSource.get('access_token')
+        const refreshToken = searchParams.get('refresh_token') || paramSource.get('refresh_token')
+        const code = searchParams.get('code') || paramSource.get('code')
+        const token = searchParams.get('token') || paramSource.get('token')
+        const email = searchParams.get('email') || paramSource.get('email')
+
+        console.log('Reset URL params:', {
+          tokenHash: Boolean(tokenHash),
+          token: Boolean(token),
+          type,
+          accessToken: Boolean(accessToken),
+          refreshToken: Boolean(refreshToken),
+          code: Boolean(code),
+          email: Boolean(email),
+          rawSearch,
+          rawHash,
         })
-        
-        if (verifyError) {
-          setPageState('error')
-          setError(verifyError.message || 'Invalid or expired reset link')
+
+        const { data: { session: currentSession } } = await supabase.auth.getSession()
+
+        if (currentSession) {
+          console.log('Existing session found; allowing password reset form.')
+          setPageState('form')
           return
         }
-        
-        // Success - show the password form
-        setPageState('form')
+
+        if ((tokenHash && type) || (token && type === 'recovery')) {
+          console.log('Verifying recovery link...')
+
+          const verifyPayload = tokenHash
+            ? {
+                token_hash: tokenHash,
+                type: 'recovery' as const,
+              }
+            : token && email
+              ? {
+                  token,
+                  type: 'recovery' as const,
+                  email,
+                }
+              : null
+
+          if (!verifyPayload) {
+            throw new Error('Missing recovery token or email in the password reset link.')
+          }
+
+          const { error: verifyError } = await supabase.auth.verifyOtp(verifyPayload)
+
+          if (!verifyError) {
+            console.log('Token verified successfully.')
+            setPageState('form')
+            return
+          }
+
+          console.error('Token verification failed:', verifyError)
+
+          if (accessToken && refreshToken) {
+            console.log('Falling back to access_token / refresh_token session setup...')
+            const { error: sessionError } = await supabase.auth.setSession({
+              access_token: accessToken,
+              refresh_token: refreshToken,
+            })
+
+            if (!sessionError) {
+              console.log('Session restored successfully.')
+              setPageState('form')
+              return
+            }
+
+            console.error('Session setup failed:', sessionError)
+          }
+
+          if (code) {
+            console.log('Falling back to code exchange...')
+            const { error: codeError } = await supabase.auth.exchangeCodeForSession(code)
+
+            if (!codeError) {
+              console.log('Code exchange succeeded.')
+              setPageState('form')
+              return
+            }
+
+            console.error('Code exchange failed:', codeError)
+          }
+
+          throw verifyError
+        }
+
+        if (accessToken && refreshToken) {
+          console.log('Restoring session from access_token / refresh_token...')
+          const { error: sessionError } = await supabase.auth.setSession({
+            access_token: accessToken,
+            refresh_token: refreshToken,
+          })
+
+          if (!sessionError) {
+            console.log('Session restored successfully.')
+            setPageState('form')
+            return
+          }
+
+          console.error('Session setup failed:', sessionError)
+        }
+
+        if (code) {
+          console.log('Exchanging code for session...')
+          const { error: codeError } = await supabase.auth.exchangeCodeForSession(code)
+
+          if (!codeError) {
+            console.log('Code exchange succeeded.')
+            setPageState('form')
+            return
+          }
+
+          console.error('Code exchange failed:', codeError)
+        }
+
+        console.error('No valid reset parameters found in the URL.')
+        setPageState('error')
+        setError('Invalid or expired reset link. Please request a new one.')
         
       } catch (err: any) {
+        console.error('Verification error:', err)
         setPageState('error')
-        setError('An error occurred. Please try again.')
+        setError(err.message || 'An error occurred. Please try again.')
       }
     }
     
@@ -82,14 +195,29 @@ export default function ResetPasswordPage() {
     }
 
     try {
-      // Update the password using the current session
+      // Check if we have an active session
+      const { data: { session } } = await supabase.auth.getSession()
+      
+      if (!session) {
+        // Try to get user anyway
+        const { data: { user } } = await supabase.auth.getUser()
+        if (!user) {
+          throw new Error('No active session. Please request a new reset link.')
+        }
+      }
+      
+      // Update the password
       const { error: updateError } = await supabase.auth.updateUser({
         password: password
       })
 
       if (updateError) {
+        console.error('Update error:', updateError)
+        
         if (updateError.message.includes('same as the old password')) {
           setError('New password must be different from your current password')
+        } else if (updateError.message.includes('No active session')) {
+          setError('Your reset link has expired. Please request a new one.')
         } else {
           setError(updateError.message)
         }
@@ -97,11 +225,10 @@ export default function ResetPasswordPage() {
         return
       }
 
-      // Sign out to clear the session
+      // Sign out after successful password change
       await supabase.auth.signOut()
       
       setPageState('success')
-      setLoading(false)
       
       // Redirect to login after 3 seconds
       setTimeout(() => {
@@ -109,6 +236,7 @@ export default function ResetPasswordPage() {
       }, 3000)
       
     } catch (err: any) {
+      console.error('Reset error:', err)
       setError('Failed to reset password. Please request a new link.')
       setLoading(false)
     }
@@ -137,10 +265,10 @@ export default function ResetPasswordPage() {
           <h1 className="text-2xl font-semibold text-gray-900 mb-2">Invalid or Expired Link</h1>
           <p className="text-gray-600 mb-6">{error}</p>
           <button
-            onClick={() => router.push('/forgot-password')}
+            onClick={() => router.push('/login')}
             className="bg-black text-white px-6 py-2 rounded-lg hover:bg-gray-900 transition"
           >
-            Request New Reset Link
+            Back to Login
           </button>
         </div>
       </div>

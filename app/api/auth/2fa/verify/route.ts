@@ -1,8 +1,10 @@
 // app/api/auth/2fa/verify/route.ts
 import { createServerClient } from '@supabase/ssr'
+import type { CookieOptions } from '@supabase/ssr'
 import { cookies } from 'next/headers'
 import { NextResponse } from 'next/server'
 import speakeasy from 'speakeasy'
+import { supabaseAdmin } from '@/lib/supabase-admin'
 
 export async function POST(request: Request) {
   try {
@@ -15,10 +17,10 @@ export async function POST(request: Request) {
           get(name: string) {
             return cookieStore.get(name)?.value
           },
-          set(name: string, value: string, options: any) {
+          set(name: string, value: string, options: CookieOptions) {
             cookieStore.set({ name, value, ...options })
           },
-          remove(name: string, options: any) {
+          remove(name: string, options: CookieOptions) {
             cookieStore.set({ name, value: '', ...options })
           },
         },
@@ -37,7 +39,7 @@ export async function POST(request: Request) {
     }
 
     // Get user's 2FA secret
-    const { data: settings, error: settingsError } = await supabase
+    const { data: settings, error: settingsError } = await supabaseAdmin
       .from('user_profile_settings')
       .select('two_factor_secret')
       .eq('user_id', user.id)
@@ -66,7 +68,7 @@ export async function POST(request: Request) {
     }
 
     // Enable 2FA
-    const { error: updateError } = await supabase
+    const { error: updateError } = await supabaseAdmin
       .from('user_profile_settings')
       .update({ 
         two_factor_enabled: true,

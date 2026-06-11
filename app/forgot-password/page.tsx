@@ -17,22 +17,49 @@ export default function ForgotPasswordPage() {
     setLoading(true)
     setError('')
 
+    // Validate email
+    if (!email.includes('@')) {
+      setError('Please enter a valid email address')
+      setLoading(false)
+      return
+    }
+
     try {
-      // Send reset email - let Supabase handle the redirect
-      const { error } = await supabase.auth.resetPasswordForEmail(email)
+      const baseUrl =
+        process.env.NEXT_PUBLIC_APP_URL ||
+        (typeof window !== 'undefined' ? window.location.origin : 'http://localhost:3000')
+
+      const { error } = await supabase.auth.resetPasswordForEmail(email, {
+        redirectTo: `${baseUrl}/auth/callback?redirect=${encodeURIComponent('/reset-password')}`,
+      })
 
       if (error) {
+        console.error('Reset password error:', error)
+        
+        // Handle specific error cases
         if (error.message.includes('User not found')) {
-          throw new Error('No account found with this email address')
+          // Supabase intentionally does not reveal whether the account exists.
+          // Show a generic confirmation instead of claiming the email was sent.
+          setSuccess(true)
+          setLoading(false)
+          return
         }
+        
         if (error.message.includes('rate limit')) {
           throw new Error('Too many attempts. Please wait 1 hour before trying again.')
         }
+        
+        if (error.message.includes('Anonymous access is disabled')) {
+          throw new Error('Unable to send reset email. Please try again later.')
+        }
+        
         throw error
       }
 
+      // Success - show confirmation message
       setSuccess(true)
     } catch (err: any) {
+      console.error('Reset error:', err)
       setError(err.message || 'Failed to send reset email. Please try again.')
     } finally {
       setLoading(false)
@@ -50,11 +77,23 @@ export default function ForgotPasswordPage() {
             Check your email
           </h1>
           <p className="text-gray-600 mb-4">
-            We've sent a password reset link to <strong>{email}</strong>
+            If there is an account for <strong>{email}</strong>, a password reset link has been sent.
           </p>
           <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 mb-6">
             <p className="text-sm text-blue-800">
-              Click the link in the email to reset your password. The link will expire in 24 hours.
+              If the email exists in our system, click the reset link in your inbox. The link will expire in 24 hours.
+            </p>
+            <p className="text-xs text-blue-600 mt-2">
+              Didn't receive the email? Check your spam folder or{' '}
+              <button
+                onClick={() => {
+                  setSuccess(false)
+                  setEmail('')
+                }}
+                className="underline hover:text-blue-800"
+              >
+                try again
+              </button>
             </p>
           </div>
           <button
@@ -86,7 +125,7 @@ export default function ForgotPasswordPage() {
 
         {error && (
           <div className="bg-red-50 text-red-600 text-sm px-4 py-3 rounded-lg mb-6 flex items-start gap-2">
-            <AlertCircle size={16} className="mt-0.5 flex-shrink-0" />
+            <AlertCircle size={16} className="mt-0.5 shrink-0" />
             <span>{error}</span>
           </div>
         )}
@@ -106,8 +145,12 @@ export default function ForgotPasswordPage() {
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
                   required
+                  autoFocus
                 />
               </div>
+              <p className="text-xs text-gray-400 mt-1">
+                We'll send a password reset link to this email
+              </p>
             </div>
 
             <button
@@ -136,9 +179,11 @@ export default function ForgotPasswordPage() {
           </form>
         </div>
 
-        <p className="text-center text-xs text-gray-400 mt-6">
-          If you don't receive the email within a few minutes, check your spam folder
-        </p>
+        <div className="mt-6 text-center">
+          <p className="text-xs text-gray-400">
+            If you don't receive the email within a few minutes, check your spam folder
+          </p>
+        </div>
       </div>
     </div>
   )

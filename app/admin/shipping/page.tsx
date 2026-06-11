@@ -4,6 +4,7 @@
 
 import { useEffect, useState } from 'react'
 import { supabase } from '@/lib/supabase'
+import { logAdminActivity } from '@/lib/admin-activity'
 import { 
   Package, 
   Truck, 
@@ -68,71 +69,24 @@ export default function AdminShippingPage() {
   const fetchReadyOrders = async () => {
     setLoading(true)
     try {
-      // Fetch orders that are processing or shipped without tracking
-      const { data: ordersData, error: ordersError } = await supabase
-        .from('orders')
-        .select('*')
-        .or(`order_status.eq.processing,order_status.eq.shipped`)
-        .order('created_at', { ascending: true })
-
-      if (ordersError) throw ordersError
-      
-      if (!ordersData || ordersData.length === 0) {
-        setOrders([])
-        setLoading(false)
-        return
+      const { data: { session } } = await supabase.auth.getSession()
+      if (!session?.access_token) {
+        throw new Error('Staff authentication required')
       }
 
-      // For each order, fetch the profile and order items separately
-      const formattedOrders: OrderForShipping[] = await Promise.all(
-        ordersData.map(async (order) => {
-          // Fetch profile
-          const { data: profileData } = await supabase
-            .from('profiles')
-            .select('first_name, last_name, email')
-            .eq('id', order.user_id)
-            .single()
+      const response = await fetch('/api/admin/shipping', {
+        headers: {
+          Authorization: `Bearer ${session.access_token}`,
+        },
+      })
 
-          // Fetch order items with product details
-          const { data: itemsData } = await supabase
-            .from('order_items')
-            .select(`
-              quantity,
-              products (
-                name,
-                weight
-              )
-            `)
-            .eq('order_id', order.id)
+      const result = await response.json()
 
-          const items = itemsData || []
-          const total_weight = items.reduce((sum: number, item: any) => {
-            const weight = item.products?.weight || 0
-            return sum + (weight * item.quantity)
-          }, 0)
+      if (!response.ok) {
+        throw new Error(result.error || 'Failed to fetch shipping orders')
+      }
 
-          const formattedItems = items.map((item: any) => ({
-            name: item.products?.name || 'Unknown Product',
-            quantity: item.quantity,
-            weight: item.products?.weight || 0
-          }))
-
-          return {
-            id: order.id,
-            user_id: order.user_id,
-            customer_name: profileData ? `${profileData.first_name || ''} ${profileData.last_name || ''}`.trim() || 'Customer' : 'Customer',
-            customer_email: profileData?.email || '',
-            items: formattedItems,
-            total_weight: total_weight,
-            shipping_address: order.shipping_address || 'No address provided',
-            order_status: order.order_status,
-            tracking_number: order.tracking_number,
-            carrier: order.carrier,
-            shipping_label_url: order.shipping_label_url,
-            created_at: order.created_at
-          }
-        })
-      )
+      const formattedOrders = (result.orders || []) as OrderForShipping[]
 
       setOrders(formattedOrders)
       
@@ -193,6 +147,43 @@ export default function AdminShippingPage() {
     try {
       const trackingNumber = generateTrackingNumber(selectedCarrier)
       const courier = philippineCouriers.find(c => c.value === selectedCarrier)
+
+      const { data: { session } } = await supabase.auth.getSession()
+      if (!session?.access_token) {
+        throw new Error('Staff authentication required')
+      }
+
+      const response = await fetch('/api/admin/shipping', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${session.access_token}`,
+        },
+        body: JSON.stringify({
+          orderId,
+          trackingNumber,
+          carrier: selectedCarrier,
+          courierLabel: courier?.label,
+        }),
+      })
+
+      const result = await response.json()
+
+      if (!response.ok) {
+        throw new Error(result.error || 'Failed to update shipping')
+      }
+
+      await logAdminActivity({
+        action: 'UPDATE_SHIPPING',
+        target_type: 'order',
+        target_id: orderId,
+        details: { carrier: selectedCarrier, tracking_number: trackingNumber, method: 'generated' },
+      })
+
+      await fetchReadyOrders()
+      
+      alert(`Order #${orderId} marked as SHIPPED!\nCourier: ${courier?.label}\nTracking: ${trackingNumber}\n\nCustomer has been notified.`)
+      return
 
       console.log('Attempting to update order:', orderId)
       console.log('Update data:', {
@@ -261,6 +252,13 @@ export default function AdminShippingPage() {
         }
       }
 
+      await logAdminActivity({
+        action: 'UPDATE_SHIPPING',
+        target_type: 'order',
+        target_id: orderId,
+        details: { carrier: selectedCarrier, tracking_number: trackingNumber, method: 'generated' },
+      })
+
       await fetchReadyOrders()
       
       alert(`✅ Order #${orderId} marked as SHIPPED!\nCourier: ${courier?.label}\nTracking: ${trackingNumber}\n\nCustomer has been notified.`)
@@ -294,6 +292,43 @@ export default function AdminShippingPage() {
 
     try {
       console.log('Manually updating order:', orderId, 'with tracking:', trackingNumber)
+      const { data: { session } } = await supabase.auth.getSession()
+      if (!session?.access_token) {
+        throw new Error('Staff authentication required')
+      }
+
+      const response = await fetch('/api/admin/shipping', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${session.access_token}`,
+        },
+        body: JSON.stringify({
+          orderId,
+          trackingNumber,
+          carrier: selectedCarrier,
+          courierLabel: courier?.label,
+        }),
+      })
+
+      const result = await response.json()
+
+      if (!response.ok) {
+        throw new Error(result.error || 'Failed to update shipping')
+      }
+
+      await logAdminActivity({
+        action: 'UPDATE_SHIPPING',
+        target_type: 'order',
+        target_id: orderId,
+        details: { carrier: selectedCarrier, tracking_number: trackingNumber, method: 'manual' },
+      })
+
+      await fetchReadyOrders()
+      setShowManualInput(null)
+      setManualTracking({})
+      alert(`Order #${orderId} marked as SHIPPED with tracking #${trackingNumber}!`)
+      return
 
       const { error: updateError } = await supabase
         .from('orders')
@@ -333,6 +368,13 @@ export default function AdminShippingPage() {
             created_at: new Date().toISOString()
           })
       }
+
+      await logAdminActivity({
+        action: 'UPDATE_SHIPPING',
+        target_type: 'order',
+        target_id: orderId,
+        details: { carrier: selectedCarrier, tracking_number: trackingNumber, method: 'manual' },
+      })
 
       await fetchReadyOrders()
       setShowManualInput(null)
@@ -589,8 +631,14 @@ export default function AdminShippingPage() {
                                         title: 'Tracking Update',
                                         message: `Track your order #${order.id}: ${getTrackingUrl(order.carrier || selectedCarrier, order.tracking_number!)}`,
                                         is_read: false,
-                                        created_at: new Date().toISOString()
-                                      })
+                                          created_at: new Date().toISOString()
+                                        })
+                                    await logAdminActivity({
+                                      action: 'SEND_TRACKING_NOTIFICATION',
+                                      target_type: 'order',
+                                      target_id: order.id,
+                                      details: { tracking_number: order.tracking_number },
+                                    })
                                     alert('Tracking link sent to customer!')
                                   } catch (err) {
                                     alert('Could not send notification. Customer may need to check their email.')

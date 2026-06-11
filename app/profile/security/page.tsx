@@ -26,29 +26,17 @@ import {
   ShoppingBag,
   Tag,
   Users,
-  Globe,
-  Moon,
-  Sun,
-  Monitor,
-  Heart, // ← Added Heart import
+  Heart,
 } from 'lucide-react'
 
 interface NotificationSettings {
   email_notifications_enabled: boolean
   push_notifications_enabled: boolean
-  sms_notifications_enabled: boolean
   notify_order_updates: boolean
   notify_promotions: boolean
   notify_product_alerts: boolean
   notify_review_responses: boolean
   notify_wishlist_updates: boolean
-}
-
-interface PreferenceSettings {
-  preferred_language: string
-  timezone: string
-  date_format: string
-  theme: 'light' | 'dark' | 'system'
 }
 
 export default function SecurityPage() {
@@ -78,7 +66,6 @@ export default function SecurityPage() {
   const [notificationSettings, setNotificationSettings] = useState<NotificationSettings>({
     email_notifications_enabled: true,
     push_notifications_enabled: true,
-    sms_notifications_enabled: false,
     notify_order_updates: true,
     notify_promotions: false,
     notify_product_alerts: true,
@@ -86,17 +73,9 @@ export default function SecurityPage() {
     notify_wishlist_updates: false,
   })
 
-  const [preferenceSettings, setPreferenceSettings] = useState<PreferenceSettings>({
-    preferred_language: 'en',
-    timezone: 'UTC',
-    date_format: 'YYYY-MM-DD',
-    theme: 'system',
-  })
-
   useEffect(() => {
     check2FAStatus()
     loadNotificationSettings()
-    loadPreferenceSettings()
   }, [])
 
   const showToast = (text: string, type: 'success' | 'error' = 'success') => {
@@ -153,7 +132,6 @@ export default function SecurityPage() {
         setNotificationSettings({
           email_notifications_enabled: data.email_notifications_enabled ?? true,
           push_notifications_enabled: data.push_notifications_enabled ?? true,
-          sms_notifications_enabled: data.sms_notifications_enabled ?? false,
           notify_order_updates: data.notify_order_updates ?? true,
           notify_promotions: data.notify_promotions ?? false,
           notify_product_alerts: data.notify_product_alerts ?? true,
@@ -163,35 +141,6 @@ export default function SecurityPage() {
       }
     } catch (error: any) {
       console.error('Error loading notification settings:', error)
-    }
-  }
-
-  // =========================
-  // LOAD PREFERENCE SETTINGS
-  // =========================
-  const loadPreferenceSettings = async () => {
-    try {
-      const { data: { user } } = await supabase.auth.getUser()
-      if (!user) return
-
-      const { data, error } = await supabase
-        .from('user_profile_settings')
-        .select('preferred_language, timezone, date_format')
-        .eq('user_id', user.id)
-        .maybeSingle()
-
-      if (error) throw error
-
-      if (data) {
-        setPreferenceSettings(prev => ({
-          ...prev,
-          preferred_language: data.preferred_language || 'en',
-          timezone: data.timezone || 'UTC',
-          date_format: data.date_format || 'YYYY-MM-DD',
-        }))
-      }
-    } catch (error: any) {
-      console.error('Error loading preference settings:', error)
     }
   }
 
@@ -208,7 +157,13 @@ export default function SecurityPage() {
         .from('user_profile_settings')
         .upsert({
           user_id: user.id,
-          ...notificationSettings,
+          email_notifications_enabled: notificationSettings.email_notifications_enabled,
+          push_notifications_enabled: notificationSettings.push_notifications_enabled,
+          notify_order_updates: notificationSettings.notify_order_updates,
+          notify_promotions: notificationSettings.notify_promotions,
+          notify_product_alerts: notificationSettings.notify_product_alerts,
+          notify_review_responses: notificationSettings.notify_review_responses,
+          notify_wishlist_updates: notificationSettings.notify_wishlist_updates,
           updated_at: new Date().toISOString(),
         }, { onConflict: 'user_id' })
 
@@ -220,36 +175,6 @@ export default function SecurityPage() {
       showToast(error.message || 'Failed to save notification settings', 'error')
     } finally {
       setLoadingNotifications(false)
-    }
-  }
-
-  // =========================
-  // SAVE PREFERENCE SETTINGS
-  // =========================
-  const savePreferenceSettings = async () => {
-    setLoading(true)
-    try {
-      const { data: { user } } = await supabase.auth.getUser()
-      if (!user) return
-
-      const { error } = await supabase
-        .from('user_profile_settings')
-        .upsert({
-          user_id: user.id,
-          preferred_language: preferenceSettings.preferred_language,
-          timezone: preferenceSettings.timezone,
-          date_format: preferenceSettings.date_format,
-          updated_at: new Date().toISOString(),
-        }, { onConflict: 'user_id' })
-
-      if (error) throw error
-
-      showToast('Preferences saved successfully!')
-    } catch (error: any) {
-      console.error('Error saving preference settings:', error)
-      showToast(error.message || 'Failed to save preferences', 'error')
-    } finally {
-      setLoading(false)
     }
   }
 
@@ -399,30 +324,6 @@ export default function SecurityPage() {
     router.push('/profile')
   }
 
-  const timezones = [
-    'UTC', 'America/New_York', 'America/Los_Angeles', 'Europe/London', 
-    'Europe/Paris', 'Asia/Tokyo', 'Asia/Singapore', 'Asia/Manila', 
-    'Australia/Sydney', 'Pacific/Auckland'
-  ]
-
-  const languages = [
-    { code: 'en', name: 'English' },
-    { code: 'es', name: 'Español' },
-    { code: 'fr', name: 'Français' },
-    { code: 'de', name: 'Deutsch' },
-    { code: 'ja', name: '日本語' },
-    { code: 'ko', name: '한국어' },
-    { code: 'zh', name: '中文' },
-    { code: 'tl', name: 'Filipino' },
-  ]
-
-  const dateFormats = [
-    { value: 'YYYY-MM-DD', label: '2024-01-31' },
-    { value: 'MM/DD/YYYY', label: '01/31/2024' },
-    { value: 'DD/MM/YYYY', label: '31/01/2024' },
-    { value: 'MMMM D, YYYY', label: 'January 31, 2024' },
-  ]
-
   return (
     <div className="min-h-screen bg-gray-50 pt-20">
       <div className="max-w-6xl mx-auto px-4 py-6">
@@ -439,8 +340,8 @@ export default function SecurityPage() {
 
           <div className="flex items-center justify-between flex-wrap gap-4">
             <div>
-              <h1 className="text-3xl font-bold text-gray-900">Security & Preferences</h1>
-              <p className="text-gray-500 mt-1">Manage your account security, notifications, and preferences</p>
+              <h1 className="text-3xl font-bold text-gray-900">Security & Notifications</h1>
+              <p className="text-gray-500 mt-1">Manage your account security and notification preferences</p>
             </div>
           </div>
         </div>
@@ -472,7 +373,7 @@ export default function SecurityPage() {
                   </div>
                   <div>
                     <h3 className="font-semibold text-gray-900">Settings Center</h3>
-                    <p className="text-xs text-gray-500">All your preferences</p>
+                    <p className="text-xs text-gray-500">Security & notifications</p>
                   </div>
                 </div>
               </div>
@@ -501,15 +402,6 @@ export default function SecurityPage() {
                   <div className="flex items-center gap-2">
                     <Bell className="w-4 h-4" />
                     <span>Notifications</span>
-                  </div>
-                  <ChevronRight className="w-4 h-4 text-gray-400" />
-                </button>
-
-                <button onClick={() => document.getElementById('preferences-section')?.scrollIntoView({ behavior: 'smooth' })}
-                  className="w-full flex items-center justify-between hover:bg-gray-50 rounded-xl px-4 py-3 text-sm text-gray-700 transition-colors">
-                  <div className="flex items-center gap-2">
-                    <Globe className="w-4 h-4" />
-                    <span>Preferences</span>
                   </div>
                   <ChevronRight className="w-4 h-4 text-gray-400" />
                 </button>
@@ -748,22 +640,6 @@ export default function SecurityPage() {
                         className="w-4 h-4 text-black rounded focus:ring-black"
                       />
                     </label>
-
-                    <label className="flex items-center justify-between p-3 bg-gray-50 rounded-xl cursor-pointer hover:bg-gray-100 transition">
-                      <div className="flex items-center gap-3">
-                        <MessageSquare className="w-5 h-5 text-gray-600" />
-                        <div>
-                          <span className="text-sm font-medium text-gray-700">SMS Notifications</span>
-                          <p className="text-xs text-gray-500">Text message notifications</p>
-                        </div>
-                      </div>
-                      <input
-                        type="checkbox"
-                        checked={notificationSettings.sms_notifications_enabled}
-                        onChange={(e) => setNotificationSettings({ ...notificationSettings, sms_notifications_enabled: e.target.checked })}
-                        className="w-4 h-4 text-black rounded focus:ring-black"
-                      />
-                    </label>
                   </div>
                 </div>
 
@@ -841,67 +717,6 @@ export default function SecurityPage() {
                 <button onClick={saveNotificationSettings} disabled={loadingNotifications}
                   className="w-full bg-black text-white rounded-xl px-6 py-3 hover:bg-gray-800 transition disabled:opacity-50 font-medium">
                   {loadingNotifications ? <Loader2 className="w-4 h-4 animate-spin mx-auto" /> : 'Save Notification Settings'}
-                </button>
-              </div>
-            </div>
-
-            {/* PREFERENCES SECTION */}
-            <div id="preferences-section" className="bg-white rounded-2xl border shadow-sm scroll-mt-24">
-              <div className="p-5 border-b bg-gray-50 rounded-t-2xl">
-                <div className="flex items-center gap-3">
-                  <div className="w-10 h-10 bg-black rounded-full flex items-center justify-center">
-                    <Globe className="w-5 h-5 text-white" />
-                  </div>
-                  <div>
-                    <h2 className="font-semibold text-gray-900 text-lg">Preferences</h2>
-                    <p className="text-sm text-gray-500">Customize your experience</p>
-                  </div>
-                </div>
-              </div>
-
-              <div className="p-5 space-y-5">
-                <div>
-                  <label className="text-sm font-medium text-gray-700 block mb-2">Language</label>
-                  <select
-                    value={preferenceSettings.preferred_language}
-                    onChange={(e) => setPreferenceSettings({ ...preferenceSettings, preferred_language: e.target.value })}
-                    className="w-full border border-gray-300 rounded-xl px-4 py-3 focus:ring-2 focus:ring-black focus:border-black outline-none"
-                  >
-                    {languages.map(lang => (
-                      <option key={lang.code} value={lang.code}>{lang.name}</option>
-                    ))}
-                  </select>
-                </div>
-
-                <div>
-                  <label className="text-sm font-medium text-gray-700 block mb-2">Timezone</label>
-                  <select
-                    value={preferenceSettings.timezone}
-                    onChange={(e) => setPreferenceSettings({ ...preferenceSettings, timezone: e.target.value })}
-                    className="w-full border border-gray-300 rounded-xl px-4 py-3 focus:ring-2 focus:ring-black focus:border-black outline-none"
-                  >
-                    {timezones.map(tz => (
-                      <option key={tz} value={tz}>{tz}</option>
-                    ))}
-                  </select>
-                </div>
-
-                <div>
-                  <label className="text-sm font-medium text-gray-700 block mb-2">Date Format</label>
-                  <select
-                    value={preferenceSettings.date_format}
-                    onChange={(e) => setPreferenceSettings({ ...preferenceSettings, date_format: e.target.value })}
-                    className="w-full border border-gray-300 rounded-xl px-4 py-3 focus:ring-2 focus:ring-black focus:border-black outline-none"
-                  >
-                    {dateFormats.map(format => (
-                      <option key={format.value} value={format.value}>{format.label}</option>
-                    ))}
-                  </select>
-                </div>
-
-                <button onClick={savePreferenceSettings} disabled={loading}
-                  className="w-full bg-black text-white rounded-xl px-6 py-3 hover:bg-gray-800 transition disabled:opacity-50 font-medium">
-                  {loading ? <Loader2 className="w-4 h-4 animate-spin mx-auto" /> : 'Save Preferences'}
                 </button>
               </div>
             </div>
