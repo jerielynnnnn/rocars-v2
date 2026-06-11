@@ -2,7 +2,7 @@
 
 'use client'
 
-import { useEffect, useState } from 'react'
+import { Suspense, useEffect, useState } from 'react'
 import { supabase } from '@/lib/supabase'
 import { logAdminActivity } from '@/lib/admin-activity'
 import { 
@@ -51,7 +51,15 @@ const philippineCouriers = [
   { value: 'blackarrow', label: 'Black Arrow Express', trackingUrl: 'https://blackarrow.ph/tracking?trackingNumber=' },
 ]
 
-export default function AdminShippingPage() {
+function ShippingLoadingFallback() {
+  return (
+    <div className="flex items-center justify-center h-64">
+      <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-black"></div>
+    </div>
+  )
+}
+
+function AdminShippingContent() {
   const searchParams = useSearchParams()
   const router = useRouter()
   const orderIdParam = searchParams.get('order')
@@ -755,5 +763,13 @@ export default function AdminShippingPage() {
         </div>
       )}
     </div>
+  )
+}
+
+export default function AdminShippingPage() {
+  return (
+    <Suspense fallback={<ShippingLoadingFallback />}>
+      <AdminShippingContent />
+    </Suspense>
   )
 }
