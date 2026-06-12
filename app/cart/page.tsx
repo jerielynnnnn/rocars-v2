@@ -494,7 +494,7 @@ export default function CartPage() {
                         {selectedAddress.zip_code}
                       </p>
                       <p className="text-sm text-gray-600">
-                        📞 {selectedAddress.phone_number}
+                        {selectedAddress.phone_number}
                       </p>
                       {selectedAddress.is_default && (
                         <span className="inline-block mt-2 text-xs bg-green-100 text-green-700 px-2 py-0.5 rounded">
@@ -569,7 +569,7 @@ export default function CartPage() {
                 {/* Note about vouchers */}
                 <div className="mt-4 p-3 bg-blue-50 rounded-lg">
                   <p className="text-xs text-blue-600 text-center">
-                    💡 Vouchers and discounts can be applied at checkout
+                    Vouchers and discounts can be applied at checkout
                   </p>
                 </div>
 
@@ -626,7 +626,7 @@ export default function CartPage() {
                 onClick={() => setShowAddressModal(false)}
                 className="p-1 hover:bg-gray-100 rounded"
               >
-                ✕
+                X
               </button>
             </div>
             <div className="p-4 overflow-y-auto max-h-[calc(80vh-120px)]">
@@ -666,7 +666,7 @@ export default function CartPage() {
                             {address.city}, {address.province} {address.zip_code}
                           </p>
                           <p className="text-sm text-gray-600 mt-1">
-                            📞 {address.phone_number}
+                            {address.phone_number}
                           </p>
                         </div>
                         {address.is_default && (

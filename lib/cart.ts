@@ -19,7 +19,7 @@ export const getCartItems = (): CartItem[] => {
 export const saveCart = (items: CartItem[]) => {
   localStorage.setItem(CART_KEY, JSON.stringify(items))
 
-  // ✅ IMPORTANT FIX: notify navbar instantly
+  // Important: notify navbar instantly
   window.dispatchEvent(new Event('cartUpdated'))
 }
 

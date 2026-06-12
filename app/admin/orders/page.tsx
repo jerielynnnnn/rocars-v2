@@ -538,7 +538,7 @@ const processCancellationRequest = async (
             onClick={() => setErrorMessage(null)}
             className="ml-auto text-red-600 hover:text-red-800"
           >
-            ✕
+            X
           </button>
         </div>
       )}
@@ -552,7 +552,7 @@ const processCancellationRequest = async (
             onClick={() => setSuccessMessage(null)}
             className="ml-auto text-green-600 hover:text-green-800"
           >
-            ✕
+            X
           </button>
         </div>
       )}

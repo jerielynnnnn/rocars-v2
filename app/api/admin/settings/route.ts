@@ -1,6 +1,7 @@
 import { createClient } from '@supabase/supabase-js'
 import { NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabase-admin'
+import { isAdminLikeRole } from '@/lib/admin-role'
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!
 const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
@@ -31,7 +32,7 @@ async function getAdminUser(request: Request) {
     .eq('id', user.id)
     .single()
 
-  if (profileError || !['admin', 'staff'].includes(profile?.role)) {
+  if (profileError || !isAdminLikeRole(profile?.role)) {
     return { user: null, error: 'Admin or staff access required' }
   }
 

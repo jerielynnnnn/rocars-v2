@@ -1,7 +1,7 @@
 // app/checkout/page.tsx
 'use client'
 
-import React, { useEffect, useState, useCallback } from 'react'
+import React, { Suspense, useEffect, useState, useCallback } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
 import Link from 'next/link'
 import { supabase } from '@/lib/supabase'
@@ -77,7 +77,7 @@ type UserVoucher = {
   voucher: Voucher | null
 }
 
-export default function CheckoutPage() {
+function CheckoutContent() {
   const router = useRouter()
   const searchParams = useSearchParams()
   const { cartItems, clearCart } = useCart()
@@ -729,7 +729,7 @@ export default function CheckoutPage() {
                         {selectedAddress.recipient_first_name} {selectedAddress.recipient_last_name}
                       </p>
                       <p className="text-sm text-gray-600">{formatAddress(selectedAddress)}</p>
-                      <p className="text-sm text-gray-600">📞 {selectedAddress.phone_number}</p>
+                      <p className="text-sm text-gray-600">{selectedAddress.phone_number}</p>
                       {selectedAddress.is_default && (
                         <span className="inline-block mt-2 bg-green-100 text-green-700 text-xs px-2 py-1 rounded">
                           Default Address
@@ -946,7 +946,7 @@ export default function CheckoutPage() {
                         <div>
                           <p className="font-medium">{address.recipient_first_name} {address.recipient_last_name}</p>
                           <p className="text-sm text-gray-600 mt-1">{formatAddress(address)}</p>
-                          <p className="text-sm text-gray-600">📞 {address.phone_number}</p>
+                          <p className="text-sm text-gray-600">{address.phone_number}</p>
                         </div>
                         {selectedAddress?.id === address.id && <CheckCircle2 className="h-5 w-5 text-yellow-500" />}
                       </div>
@@ -1145,5 +1145,13 @@ export default function CheckoutPage() {
         </div>
       )}
     </main>
+  )
+}
+
+export default function CheckoutPage() {
+  return (
+    <Suspense fallback={<div className="min-h-screen bg-gray-50 flex items-center justify-center text-gray-600">Loading checkout...</div>}>
+      <CheckoutContent />
+    </Suspense>
   )
 }

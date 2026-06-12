@@ -207,7 +207,7 @@ export default function SignUpPage() {
                 <div className="my-8">
                   <div className="relative w-full h-64">
                     <img
-                      src="/sign.png"
+                      src="/logo.png"
                       alt="ROCARS Automotive"
                       className="w-full h-full object-contain"
                     />

@@ -59,7 +59,7 @@ export default function VerifyEmailPendingPage() {
       
       if (error) throw error
       
-      setResendMessage('✅ Verification email sent! Check your inbox.')
+      setResendMessage('Verification email sent! Check your inbox.')
       setCountdown(60)
       
       const timer = setInterval(() => {
@@ -74,7 +74,7 @@ export default function VerifyEmailPendingPage() {
       
     } catch (err: any) {
       console.error('Resend error:', err)
-      setResendMessage('❌ Failed to resend. Please try again.')
+      setResendMessage('Failed to resend. Please try again.')
     } finally {
       setResendLoading(false)
     }
@@ -152,7 +152,7 @@ export default function VerifyEmailPendingPage() {
 
           {/* Tips Box */}
           <div className="bg-blue-50 rounded-xl p-4 mb-6 text-left">
-            <p className="text-xs font-semibold text-blue-900 mb-2">💡 Tips:</p>
+            <p className="text-xs font-semibold text-blue-900 mb-2">Tips:</p>
             <ul className="text-xs text-blue-800 space-y-1">
               <li>• Check your spam/junk folder</li>
               <li>• Add noreply@supabase.co to your contacts</li>
@@ -164,7 +164,7 @@ export default function VerifyEmailPendingPage() {
           {/* Resend Message */}
           {resendMessage && (
             <div className={`text-sm p-2 rounded-lg mb-4 ${
-              resendMessage.includes('✅') ? 'bg-green-50 text-green-600' : 'bg-red-50 text-red-600'
+              resendMessage.includes('sent') ? 'bg-green-50 text-green-600' : 'bg-red-50 text-red-600'
             }`}>
               {resendMessage}
             </div>

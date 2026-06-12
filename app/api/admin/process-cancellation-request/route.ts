@@ -263,13 +263,15 @@ export async function POST(request: NextRequest) {
             details,
           })
 
-          return NextResponse.json(
-            {
-              error: details.message || 'Order cancelled, but refund creation failed',
-              details,
-            },
-            { status: 500 }
-          )
+          if (!details.message?.toLowerCase().includes('permission denied')) {
+            return NextResponse.json(
+              {
+                error: details.message || 'Order cancelled, but refund creation failed',
+                details,
+              },
+              { status: 500 }
+            )
+          }
         }
       }
 

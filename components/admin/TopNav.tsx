@@ -193,7 +193,7 @@ export function TopNav() {
                     onClick={() => setIsExportOpen(false)}
                     className="p-1 hover:bg-gray-100 rounded-lg"
                   >
-                    ✕
+                    X
                   </button>
                 </div>
 

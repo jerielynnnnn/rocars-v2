@@ -165,7 +165,7 @@ export async function POST(request: NextRequest) {
         .from('notifications')
         .insert({
           user_id: authData.user.id,
-          title: 'Welcome to the Team! 🎉',
+          title: 'Welcome to the Team!',
           message: `You've been added as a ${role || 'staff'} member. Welcome to the team!`,
           type: 'welcome',
           is_read: false,

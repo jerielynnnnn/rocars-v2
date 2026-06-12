@@ -10,7 +10,7 @@ export async function GET(request: Request) {
   const code = requestUrl.searchParams.get('code')
   const rawRedirect = requestUrl.searchParams.get('redirect')
 
-  // ✅ SAFE redirect (prevents open redirect attacks)
+  // Safe redirect (prevents open redirect attacks)
   const redirect =
     rawRedirect && rawRedirect.startsWith('/') && !rawRedirect.startsWith('//')
       ? rawRedirect

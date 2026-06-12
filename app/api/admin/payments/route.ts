@@ -42,12 +42,65 @@ async function requireStaff(request: NextRequest) {
   return { user }
 }
 
+async function getRefundedOrderIds() {
+  const refundedOrderIds = new Set<number>()
+
+  const { data: refundsData, error: refundsError } = await supabaseAdmin
+    .from('refunds')
+    .select('order_id')
+    .in('refund_status', ['approved', 'completed'])
+
+  if (!refundsError) {
+    for (const refund of refundsData || []) {
+      if (refund.order_id) {
+        refundedOrderIds.add(Number(refund.order_id))
+      }
+    }
+  }
+
+  const { data: fallbackRequests, error: fallbackError } = await supabaseAdmin
+    .from('cancellation_requests')
+    .select('order_id, admin_notes')
+    .in('status', ['approved'])
+
+  if (!fallbackError) {
+    for (const request of fallbackRequests || []) {
+      if (
+        request.order_id
+        && String(request.admin_notes || '').match(/\[REFUND_STATUS:(approved|completed)\]/)
+      ) {
+        refundedOrderIds.add(Number(request.order_id))
+      }
+    }
+  }
+
+  return refundedOrderIds
+}
+
 export async function GET(request: NextRequest) {
   const auth = await requireStaff(request)
 
   if ('error' in auth) {
     return NextResponse.json({ error: auth.error }, { status: auth.status })
   }
+
+  const refundedOrderIds = await getRefundedOrderIds()
+
+  const { data: revenueOrders, error: revenueOrdersError } = await supabaseAdmin
+    .from('orders')
+    .select('id, total_amount')
+    .eq('payment_status', 'paid')
+
+  if (revenueOrdersError) {
+    return NextResponse.json({ error: revenueOrdersError.message }, { status: 500 })
+  }
+
+  const totalRevenue = (revenueOrders || [])
+    .filter((order) => !refundedOrderIds.has(Number(order.id)))
+    .reduce(
+      (sum, order) => sum + Number(order.total_amount || 0),
+      0
+    )
 
   const { data: paymentsData, error: paymentsError } = await supabaseAdmin
     .from('payments')
@@ -63,7 +116,7 @@ export async function GET(request: NextRequest) {
   }
 
   if (!paymentsData || paymentsData.length === 0) {
-    return NextResponse.json({ payments: [] })
+    return NextResponse.json({ payments: [], totalRevenue })
   }
 
   const orderIds = Array.from(
@@ -109,10 +162,12 @@ export async function GET(request: NextRequest) {
     }
   })
 
-  return NextResponse.json({ payments })
+  return NextResponse.json({ payments, totalRevenue })
 }
 
 async function getPaymentsFromOrders() {
+  const refundedOrderIds = await getRefundedOrderIds()
+
   const { data: ordersData, error: ordersError } = await supabaseAdmin
     .from('orders')
     .select(`
@@ -173,6 +228,10 @@ async function getPaymentsFromOrders() {
 
   return NextResponse.json({
     payments,
+    totalRevenue: payments
+      .filter((payment) => payment.payment_status === 'paid')
+      .filter((payment) => !refundedOrderIds.has(Number(payment.order_id)))
+      .reduce((sum, payment) => sum + Number(payment.amount || 0), 0),
     warning: 'Payments table is not readable by the service role; showing order payment data instead.',
   })
 }
@@ -199,7 +258,7 @@ export async function POST(request: NextRequest) {
   }
 
   const effectiveOrderId = orderId || paymentId
-  let paymentsTableDenied = false
+  let paymentsTableUnavailable = false
 
   const { error: paymentError } = await supabaseAdmin
     .from('payments')
@@ -207,15 +266,12 @@ export async function POST(request: NextRequest) {
     .eq('id', paymentId)
 
   if (paymentError) {
-    if (!paymentError.message.toLowerCase().includes('permission denied')) {
-      return NextResponse.json({ error: paymentError.message }, { status: 500 })
-    }
-
-    paymentsTableDenied = true
+    paymentsTableUnavailable = true
+    console.error('Payments table update failed; falling back to orders payment fields:', paymentError)
   }
 
-  if (effectiveOrderId && (newStatus === 'paid' || paymentsTableDenied)) {
-    const orderUpdate =
+  if (effectiveOrderId) {
+    const orderUpdate: Record<string, string | undefined> =
       newStatus === 'paid'
         ? {
             payment_status: 'paid',
@@ -224,8 +280,15 @@ export async function POST(request: NextRequest) {
           }
         : {
             payment_status: newStatus,
+            order_status: newStatus === 'failed' ? 'pending_payment' : undefined,
             updated_at: new Date().toISOString(),
           }
+
+    Object.keys(orderUpdate).forEach((key) => {
+      if (orderUpdate[key] === undefined) {
+        delete orderUpdate[key]
+      }
+    })
 
     const { error: orderError } = await supabaseAdmin
       .from('orders')
@@ -243,8 +306,15 @@ export async function POST(request: NextRequest) {
           order_id: effectiveOrderId,
           status: 'processing',
           notes: 'Payment confirmed, order is now processing',
-        })
+      })
     }
+  }
+
+  if (!effectiveOrderId && paymentsTableUnavailable) {
+    return NextResponse.json(
+      { error: 'Payment table is unavailable and no order id was provided for fallback update' },
+      { status: 500 }
+    )
   }
 
   if (effectiveOrderId && (newStatus === 'paid' || newStatus === 'failed')) {

@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { supabase } from '@/lib/supabase';
 import {
   RefreshCw,
@@ -10,16 +10,9 @@ import {
   XCircle,
   Clock,
   Loader2,
-  AlertCircle,
   ChevronLeft,
   ChevronRight,
-  Filter,
-  MessageSquare,
   DollarSign,
-  User,
-  Package,
-  Calendar,
-  FileText
 } from 'lucide-react';
 import Link from 'next/link';
 
@@ -57,64 +50,48 @@ export default function RefundsPage() {
   const [showRefundModal, setShowRefundModal] = useState(false);
   const [adminResponse, setAdminResponse] = useState('');
   const [processingAction, setProcessingAction] = useState(false);
-  const [showActionMenu, setShowActionMenu] = useState<number | null>(null);
   
   const itemsPerPage = 10;
 
-  useEffect(() => {
-    fetchRefunds();
-  }, [currentPage, statusFilter]);
-
-  const fetchRefunds = async () => {
+  const fetchRefunds = useCallback(async () => {
     setLoading(true);
     try {
-      let query = supabase
-        .from('refunds')
-        .select(`
-          *,
-          orders!refunds_order_id_fkey (
-            id,
-            total_amount,
-            order_status,
-            payment_method,
-            created_at
-          ),
-          profiles!refunds_user_id_fkey (
-            id,
-            first_name,
-            last_name,
-            email
-          )
-        `);
-
-      if (statusFilter !== 'all') {
-        query = query.eq('refund_status', statusFilter);
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session?.access_token) {
+        throw new Error('Admin authentication required');
       }
 
-      const from = (currentPage - 1) * itemsPerPage;
-      const to = from + itemsPerPage - 1;
+      const params = new URLSearchParams({
+        page: String(currentPage),
+        pageSize: String(itemsPerPage),
+        status: statusFilter,
+      });
 
-      const { data, error, count } = await query
-        .order('created_at', { ascending: false })
-        .range(from, to);
+      const response = await fetch(`/api/admin/refunds?${params.toString()}`, {
+        headers: {
+          Authorization: `Bearer ${session.access_token}`,
+        },
+      });
+      const result = await response.json();
 
-      if (error) throw error;
+      if (!response.ok) {
+        throw new Error(result.error || 'Failed to load refunds');
+      }
 
-      const formattedRefunds = data?.map(refund => ({
-        ...refund,
-        order: refund.orders,
-        user: refund.profiles
-      })) || [];
-
-      setRefunds(formattedRefunds);
-      setTotalPages(Math.ceil((count || 0) / itemsPerPage));
+      setRefunds((result.refunds || []) as Refund[]);
+      setTotalPages(Math.max(1, Math.ceil((result.total || 0) / itemsPerPage)));
     } catch (error) {
       console.error('Error fetching refunds:', error);
-      alert('Failed to load refunds');
+      alert(error instanceof Error ? error.message : 'Failed to load refunds');
     } finally {
       setLoading(false);
     }
-  };
+  }, [currentPage, statusFilter]);
+
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    fetchRefunds();
+  }, [fetchRefunds]);
 
   const handleUpdateRefundStatus = async (refundId: number, newStatus: string, response?: string) => {
     if (!confirm(`Are you sure you want to ${newStatus} this refund request?`)) {
@@ -123,41 +100,27 @@ export default function RefundsPage() {
 
     setProcessingAction(true);
     try {
-      const updateData: any = {
-        refund_status: newStatus
-      };
-      
-      if (response) {
-        updateData.admin_response = response;
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session?.access_token) {
+        throw new Error('Admin authentication required');
       }
 
-      const { error } = await supabase
-        .from('refunds')
-        .update(updateData)
-        .eq('id', refundId);
+      const apiResponse = await fetch('/api/admin/refunds', {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${session.access_token}`,
+        },
+        body: JSON.stringify({
+          refundId,
+          status: newStatus,
+          adminResponse: response || null,
+        }),
+      });
+      const result = await apiResponse.json();
 
-      if (error) throw error;
-
-      // If approved, update the order status
-      if (newStatus === 'approved') {
-        const refund = refunds.find(r => r.id === refundId);
-        if (refund) {
-          await supabase
-            .from('orders')
-            .update({ 
-              order_status: 'refunded',
-              payment_status: 'refunded',
-              refund_approved_at: new Date().toISOString()
-            })
-            .eq('id', refund.order_id);
-
-          await supabase
-            .from('payments')
-            .update({
-              payment_status: 'refunded'
-            })
-            .eq('order_id', refund.order_id);
-        }
+      if (!apiResponse.ok) {
+        throw new Error(result.error || 'Failed to update refund status');
       }
 
       alert(`Refund ${newStatus} successfully`);
@@ -166,10 +129,9 @@ export default function RefundsPage() {
       setAdminResponse('');
     } catch (error) {
       console.error('Error updating refund:', error);
-      alert('Failed to update refund status');
+      alert(error instanceof Error ? error.message : 'Failed to update refund status');
     } finally {
       setProcessingAction(false);
-      setShowActionMenu(null);
     }
   };
 
@@ -177,7 +139,6 @@ export default function RefundsPage() {
     setSelectedRefund(refund);
     setAdminResponse(refund.admin_response || '');
     setShowRefundModal(true);
-    setShowActionMenu(null);
   };
 
   const getStatusBadge = (status: string) => {
@@ -208,6 +169,36 @@ export default function RefundsPage() {
       style: 'currency',
       currency: 'PHP'
     }).format(price);
+  };
+
+  const getSubmittedProblem = (reason: string) => {
+    const proofMatch = reason.match(/\n\n\[PROOFS:(.+)\]$/s);
+    const cleanReason = proofMatch ? reason.replace(proofMatch[0], '').trim() : reason;
+    let proofs: string[] = [];
+
+    if (proofMatch) {
+      try {
+        const parsedProofs = JSON.parse(proofMatch[1]);
+        proofs = Array.isArray(parsedProofs)
+          ? parsedProofs.filter((url): url is string => typeof url === 'string')
+          : [];
+      } catch {
+        proofs = [];
+      }
+    }
+
+    const [rawType, ...detailsParts] = cleanReason.split(':');
+    const details = detailsParts.join(':').trim();
+
+    return {
+      type: rawType?.trim() || 'Problem report',
+      details: details || cleanReason,
+      proofs,
+    };
+  };
+
+  const isVideoProof = (url: string) => {
+    return /\.(mp4|mov|webm|m4v)(\?|$)/i.test(url);
   };
 
   const filteredRefunds = refunds.filter(refund =>
@@ -294,6 +285,54 @@ export default function RefundsPage() {
         </div>
       </div>
 
+      {/* Submitted Problems */}
+      {refunds.length > 0 && (
+        <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-4">
+          <div className="flex items-center justify-between mb-4">
+            <div>
+              <h2 className="text-base font-semibold text-gray-900">Submitted Problems</h2>
+              <p className="text-sm text-gray-500">Customer reports from delivered orders that need refund review</p>
+            </div>
+            <span className="text-sm font-medium text-yellow-700 bg-yellow-50 px-3 py-1 rounded-full">
+              {refunds.filter((refund) => refund.refund_status === 'pending').length} pending
+            </span>
+          </div>
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
+            {refunds
+              .filter((refund) => refund.refund_status === 'pending')
+              .slice(0, 4)
+              .map((refund) => {
+                const problem = getSubmittedProblem(refund.reason);
+
+                return (
+                  <button
+                    key={refund.id}
+                    onClick={() => handleViewRefund(refund)}
+                    className="text-left rounded-lg border border-gray-200 p-3 hover:bg-gray-50 transition"
+                  >
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <p className="text-sm font-semibold text-gray-900 truncate">
+                          {problem.type}
+                        </p>
+                        <p className="text-xs text-gray-500 mt-1">
+                          Order #{refund.order_id} · {refund.user?.email || 'Customer'}
+                        </p>
+                      </div>
+                      <span className="text-xs text-yellow-700 bg-yellow-50 px-2 py-1 rounded-full">
+                        Pending
+                      </span>
+                    </div>
+                    <p className="text-sm text-gray-600 mt-2 line-clamp-2">
+                      {problem.details}
+                    </p>
+                  </button>
+                );
+              })}
+          </div>
+        </div>
+      )}
+
       {/* Filters Bar */}
       <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-4">
         <div className="flex flex-col md:flex-row gap-4">
@@ -332,7 +371,7 @@ export default function RefundsPage() {
                 <th className="text-left px-6 py-3 text-xs font-medium text-gray-500 uppercase tracking-wider">Order ID</th>
                 <th className="text-left px-6 py-3 text-xs font-medium text-gray-500 uppercase tracking-wider">Customer</th>
                 <th className="text-left px-6 py-3 text-xs font-medium text-gray-500 uppercase tracking-wider">Amount</th>
-                <th className="text-left px-6 py-3 text-xs font-medium text-gray-500 uppercase tracking-wider">Reason</th>
+                <th className="text-left px-6 py-3 text-xs font-medium text-gray-500 uppercase tracking-wider">Submitted Problem</th>
                 <th className="text-left px-6 py-3 text-xs font-medium text-gray-500 uppercase tracking-wider">Status</th>
                 <th className="text-left px-6 py-3 text-xs font-medium text-gray-500 uppercase tracking-wider">Date</th>
                 <th className="text-right px-6 py-3 text-xs font-medium text-gray-500 uppercase tracking-wider">Actions</th>
@@ -366,9 +405,21 @@ export default function RefundsPage() {
                       </span>
                     </td>
                     <td className="px-6 py-4">
-                      <p className="text-sm text-gray-600 max-w-xs truncate">
-                        {refund.reason}
-                      </p>
+                      {(() => {
+                        const problem = getSubmittedProblem(refund.reason);
+
+                        return (
+                          <div className="max-w-xs">
+                            <p className="text-sm font-medium text-gray-700 truncate">{problem.type}</p>
+                        <p className="text-xs text-gray-500 truncate">{problem.details}</p>
+                        {problem.proofs.length > 0 && (
+                          <p className="text-xs text-blue-600 mt-1">
+                            {problem.proofs.length} proof file{problem.proofs.length === 1 ? '' : 's'} attached
+                          </p>
+                        )}
+                      </div>
+                    );
+                  })()}
                     </td>
                     <td className="px-6 py-4">
                       <span className={`inline-flex items-center gap-1 px-2 py-1 rounded-full text-xs font-medium ${StatusBadge.color}`}>
@@ -493,11 +544,57 @@ export default function RefundsPage() {
                 </div>
               </div>
 
-              {/* Refund Reason */}
+              {/* Submitted Problem */}
               <div className="border-t border-gray-100 pt-4">
-                <h3 className="font-semibold text-gray-900 mb-3">Refund Reason</h3>
+                <h3 className="font-semibold text-gray-900 mb-3">Submitted Problem</h3>
                 <div className="bg-yellow-50 rounded-lg p-4">
-                  <p className="text-sm text-gray-700">{selectedRefund.reason}</p>
+                  {(() => {
+                    const problem = getSubmittedProblem(selectedRefund.reason);
+
+                    return (
+                      <div className="space-y-2">
+                        <div>
+                          <p className="text-xs font-medium text-yellow-700">Problem Type</p>
+                          <p className="text-sm font-semibold text-gray-900">{problem.type}</p>
+                        </div>
+                        <div>
+                          <p className="text-xs font-medium text-yellow-700">Customer Details</p>
+                          <p className="text-sm text-gray-700 whitespace-pre-line">{problem.details}</p>
+                        </div>
+                        {problem.proofs.length > 0 && (
+                          <div>
+                            <p className="text-xs font-medium text-yellow-700">Proof Attachments</p>
+                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mt-2">
+                              {problem.proofs.map((url, index) => (
+                                <a
+                                  key={url}
+                                  href={url}
+                                  target="_blank"
+                                  rel="noreferrer"
+                                  className="block overflow-hidden rounded-lg border border-yellow-200 bg-white"
+                                >
+                                  {isVideoProof(url) ? (
+                                    <video
+                                      src={url}
+                                      className="h-36 w-full object-cover"
+                                      controls
+                                    />
+                                  ) : (
+                                    <img
+                                      src={url}
+                                      alt={`Refund proof ${index + 1}`}
+                                      className="h-36 w-full object-cover"
+                                    />
+                                  )}
+                                  <p className="px-3 py-2 text-xs text-blue-600">Open proof #{index + 1}</p>
+                                </a>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })()}
                 </div>
               </div>
 

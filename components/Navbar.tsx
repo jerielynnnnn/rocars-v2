@@ -236,7 +236,7 @@ export default function Navbar() {
             notificationsList.push({
               id: `lowstock-${product.id}`,
               type: 'low_stock',
-              title: '⚠️ Low Stock Alert',
+              title: 'Low Stock Alert',
               message: `${product.name} has only ${product.stock} items left in stock`,
               created_at: new Date().toISOString(),
               is_read: false,
@@ -264,7 +264,7 @@ export default function Navbar() {
             notificationsList.push({
               id: `order-${order.id}`,
               type: 'new_order',
-              title: '🛒 New Order Received',
+              title: 'New Order Received',
               message: `Order #${order.id} - ₱${order.total_amount?.toLocaleString()} needs processing`,
               created_at: order.created_at,
               is_read: false,

@@ -176,7 +176,7 @@ export async function createStaff(formData: {
         .from('notifications')
         .insert({
           user_id: authData.user.id,
-          title: 'Welcome to the Team! 🎉',
+          title: 'Welcome to the Team!',
           message: `You've been added as a ${role} member.`,
           type: 'welcome',
           is_read: false,

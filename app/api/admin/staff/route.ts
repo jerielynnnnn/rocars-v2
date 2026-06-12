@@ -41,14 +41,19 @@ export async function GET(request: NextRequest) {
 
   const { data, error } = await supabaseAdmin
     .from('profiles')
-    .select('id, email, first_name, last_name, username, role, avatar_url, created_at, last_sign_in_at')
+    .select('id, email, first_name, last_name, username, role, avatar_url, created_at')
     .order('created_at', { ascending: false })
 
   if (error) {
     return NextResponse.json({ error: error.message }, { status: 500 })
   }
 
-  const staff = (data || []).filter((profile) => isAdminLikeRole(profile.role))
+  const staff = (data || [])
+    .filter((profile) => isAdminLikeRole(profile.role))
+    .map((profile) => ({
+      ...profile,
+      last_sign_in_at: null,
+    }))
 
   return NextResponse.json({ staff })
 }

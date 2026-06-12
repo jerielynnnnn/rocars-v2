@@ -248,7 +248,7 @@ function AdminShippingContent() {
           .from('notifications')
           .insert({
             user_id: order.user_id,
-            title: 'Your Order Has Shipped! 🚚',
+            title: 'Your Order Has Shipped!',
             message: `Order #${orderId} has been shipped via ${courier?.label}. Tracking: ${trackingNumber}`,
             is_read: false,
             created_at: new Date().toISOString()
@@ -269,16 +269,16 @@ function AdminShippingContent() {
 
       await fetchReadyOrders()
       
-      alert(`✅ Order #${orderId} marked as SHIPPED!\nCourier: ${courier?.label}\nTracking: ${trackingNumber}\n\nCustomer has been notified.`)
+      alert(`Order #${orderId} marked as SHIPPED!\nCourier: ${courier?.label}\nTracking: ${trackingNumber}\n\nCustomer has been notified.`)
       
     } catch (error: any) {
       console.error('Failed to generate label - Full error:', error)
       
       // Show specific error message
       if (error?.message) {
-        alert(`❌ Failed to generate tracking: ${error.message}`)
+        alert(`Failed to generate tracking: ${error.message}`)
       } else {
-        alert('❌ Failed to generate tracking. Please enter tracking number manually.')
+        alert('Failed to generate tracking. Please enter tracking number manually.')
       }
       
       setShowManualInput(orderId)
@@ -370,7 +370,7 @@ function AdminShippingContent() {
           .from('notifications')
           .insert({
             user_id: order.user_id,
-            title: 'Your Order Has Shipped! 🚚',
+            title: 'Your Order Has Shipped!',
             message: `Order #${orderId} has been shipped via ${courier?.label}. Tracking: ${trackingNumber}`,
             is_read: false,
             created_at: new Date().toISOString()
@@ -387,7 +387,7 @@ function AdminShippingContent() {
       await fetchReadyOrders()
       setShowManualInput(null)
       setManualTracking({})
-      alert(`✅ Order #${orderId} marked as SHIPPED with tracking #${trackingNumber}!`)
+      alert(`Order #${orderId} marked as SHIPPED with tracking #${trackingNumber}!`)
       
     } catch (error: any) {
       console.error('Error saving tracking number:', error)

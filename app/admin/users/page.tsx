@@ -94,7 +94,7 @@ export default function UsersPage() {
       let query = supabase
         .from('profiles')
         .select('*', { count: 'exact' })
-        .neq('role', 'admin'); // 🔥 CRITICAL: Exclude all admin users
+        .neq('role', 'admin'); // Critical: exclude all admin users
 
       if (roleFilter !== 'all') {
         query = query.eq('role', roleFilter);
@@ -227,11 +227,11 @@ export default function UsersPage() {
   const handleDeleteUser = async (userId: string, userName: string) => {
     // Prevent deleting current admin
     if (userId === currentAdminId) {
-      alert("⚠️ You cannot delete your own admin account!");
+      alert("You cannot delete your own admin account!");
       return;
     }
 
-    if (!confirm(`⚠️ WARNING: You are about to permanently delete ${userName}. This action CANNOT be undone. All user data including orders, reviews, and wishlist items will be lost. Continue?`)) {
+    if (!confirm(`WARNING: You are about to permanently delete ${userName}. This action CANNOT be undone. All user data including orders, reviews, and wishlist items will be lost. Continue?`)) {
       return;
     }
 
@@ -276,8 +276,8 @@ export default function UsersPage() {
       }
       
       const message = authDeleted 
-        ? `✅ ${userName} deleted successfully from Auth and Profiles`
-        : `✅ ${userName} removed from profiles (Auth user didn't exist)`;
+        ? `${userName} deleted successfully from Auth and Profiles`
+        : `${userName} removed from profiles (Auth user didn't exist)`;
       
       alert(message);
       
@@ -291,7 +291,7 @@ export default function UsersPage() {
       
     } catch (error: any) {
       console.error('Delete error:', error);
-      alert(`❌ Failed to delete user: ${error.message}`);
+      alert(`Failed to delete user: ${error.message}`);
     } finally {
       setDeleting(false);
     }
@@ -305,11 +305,11 @@ export default function UsersPage() {
     
     // Check if trying to delete current admin
     if (selectedUsersForDelete.includes(currentAdminId || '')) {
-      alert("⚠️ You cannot delete your own admin account! Please remove it from the selection.");
+      alert("You cannot delete your own admin account! Please remove it from the selection.");
       return;
     }
     
-    if (!confirm(`⚠️ WARNING: You are about to permanently delete ${selectedUsersForDelete.length} selected user(s). This action CANNOT be undone. Continue?`)) {
+    if (!confirm(`WARNING: You are about to permanently delete ${selectedUsersForDelete.length} selected user(s). This action CANNOT be undone. Continue?`)) {
       return;
     }
     
@@ -345,9 +345,9 @@ export default function UsersPage() {
       }
     }
     
-    let message = `✅ Successfully deleted: ${results.success.length} users\n`;
+    let message = `Successfully deleted: ${results.success.length} users\n`;
     if (results.failed.length > 0) {
-      message += `❌ Failed: ${results.failed.length} users\n`;
+      message += `Failed: ${results.failed.length} users\n`;
       results.failed.slice(0, 3).forEach(f => {
         message += `  - ${f.id.slice(0, 8)}...: ${f.error}\n`;
       });

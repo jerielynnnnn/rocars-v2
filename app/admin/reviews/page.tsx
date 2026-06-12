@@ -612,7 +612,7 @@ export default function AdminReviewsPage() {
                 onClick={() => setSelectedReview(null)}
                 className="h-10 w-10 rounded-lg hover:bg-gray-100 flex items-center justify-center"
               >
-                ✕
+                X
               </button>
             </div>
 

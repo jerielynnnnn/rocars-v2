@@ -238,7 +238,7 @@ export default function TwoFactorSetup({ onComplete, onCancel }: TwoFactorSetupP
           
           <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4">
             <p className="text-sm text-yellow-800 mb-3">
-              ⚠️ Save these backup codes in a secure place. You can use them to access your account if you lose your authenticator app.
+              Save these backup codes in a secure place. You can use them to access your account if you lose your authenticator app.
             </p>
             
             <div className="bg-white rounded-lg p-3 font-mono text-sm grid grid-cols-2 gap-2 mb-3 border border-gray-200">

@@ -303,7 +303,7 @@ export default function ProductDetailPage() {
     return (
       <div className="min-h-screen bg-gray-50 pt-24">
         <div className="container mx-auto px-4 py-8 text-center">
-          <div className="text-6xl mb-4">🔍</div>
+          <div className="text-6xl mb-4">No results</div>
           <h1 className="text-2xl font-bold mb-2">Product Not Found</h1>
           <p className="text-gray-500 mb-6">{error || "The product you're looking for doesn't exist."}</p>
           <Link href="/products" className="inline-flex items-center gap-2 px-6 py-3 bg-black text-white rounded-lg hover:bg-gray-800 transition">

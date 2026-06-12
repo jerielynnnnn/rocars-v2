@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react'
+import { Suspense, useEffect, useMemo, useState } from 'react'
 import { supabase } from '@/lib/supabase'
 import Link from 'next/link'
 import { useRouter, useSearchParams } from 'next/navigation'
@@ -81,7 +81,15 @@ const features = [
 
 const PRODUCTS_PER_PAGE = 12
 
-export default function ProductsPage() {
+function ProductsLoadingFallback() {
+  return (
+    <div className="flex min-h-screen items-center justify-center bg-[#f6f6f4]">
+      <div className="text-gray-600">Loading products...</div>
+    </div>
+  )
+}
+
+function ProductsContent() {
   const router = useRouter()
   const searchParams = useSearchParams()
 
@@ -422,76 +430,18 @@ export default function ProductsPage() {
     setClaimingVoucher(voucher.id)
 
     try {
-      // First, check if the voucher is still valid in the database
-      const { data: voucherData, error: voucherError } = await supabase
-        .from('vouchers')
-        .select('*')
-        .eq('id', voucher.id)
-        .single()
+      const response = await fetch('/api/vouchers/claim', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${currentSession.access_token}`,
+        },
+        body: JSON.stringify({ voucherId: voucher.id }),
+      })
+      const result = await response.json()
 
-      if (voucherError) {
-        throw new Error('Failed to fetch voucher details')
-      }
-
-      if (!voucherData || !voucherData.is_active) {
-        throw new Error('This voucher is no longer active')
-      }
-
-      if (new Date(voucherData.valid_until) < new Date()) {
-        throw new Error('This voucher has expired')
-      }
-
-      if (voucherData.usage_limit && voucherData.used_count >= voucherData.usage_limit) {
-        throw new Error('This voucher has reached its usage limit')
-      }
-
-      // Check if user already claimed this voucher
-      const { data: existingClaim, error: checkError } = await supabase
-        .from('voucher_usage')
-        .select('id')
-        .eq('user_id', currentSession.user.id)
-        .eq('voucher_id', voucher.id)
-        .maybeSingle()
-
-      if (checkError) {
-        throw new Error('Failed to check existing claims')
-      }
-
-      if (existingClaim) {
-        setShowVoucherAlert({ 
-          show: true, 
-          message: 'You have already claimed this voucher!', 
-          type: 'error' 
-        })
-        setClaimedVouchers([...claimedVouchers, voucher.id])
-        setClaimingVoucher(null)
-        return
-      }
-
-      // Insert voucher usage
-      const { error: insertError } = await supabase
-        .from('voucher_usage')
-        .insert({
-          user_id: currentSession.user.id,
-          voucher_id: voucher.id,
-          voucher_code: voucher.code,
-          discount_amount: 0,
-          free_shipping: voucher.type === 'free_shipping'
-        })
-
-      if (insertError) {
-        console.error('Insert error:', insertError)
-        throw new Error(insertError.message || 'Failed to claim voucher')
-      }
-
-      // Update voucher usage count
-      const { error: updateError } = await supabase
-        .from('vouchers')
-        .update({ used_count: (voucherData.used_count || 0) + 1 })
-        .eq('id', voucher.id)
-
-      if (updateError) {
-        console.error('Update error:', updateError)
+      if (!response.ok) {
+        throw new Error(result.error || 'Failed to claim voucher')
       }
 
       // Update local state
@@ -501,7 +451,7 @@ export default function ProductsPage() {
       try {
         await supabase.from('notifications').insert({
           user_id: currentSession.user.id,
-          title: 'Voucher Claimed! 🎉',
+          title: 'Voucher Claimed',
           message: `You've successfully claimed ${voucher.type === 'percentage' ? `${voucher.value}% OFF` : voucher.type === 'fixed' ? `₱${voucher.value.toLocaleString()} OFF` : 'Free Shipping'} voucher. Use it at checkout!`,
         })
       } catch (notifError) {
@@ -510,18 +460,18 @@ export default function ProductsPage() {
 
       setShowVoucherAlert({ 
         show: true, 
-        message: `Successfully claimed ${voucher.type === 'percentage' ? `${voucher.value}% OFF` : voucher.type === 'fixed' ? `₱${voucher.value.toLocaleString()} OFF` : 'Free Shipping'} voucher! 🎉`, 
+        message: `Successfully claimed ${voucher.type === 'percentage' ? `${voucher.value}% OFF` : voucher.type === 'fixed' ? `₱${voucher.value.toLocaleString()} OFF` : 'Free Shipping'} voucher!`, 
         type: 'success' 
       })
       
       // Refresh vouchers to update available count
       await fetchVouchers()
       
-    } catch (error: any) {
+    } catch (error) {
       console.error('Error claiming voucher:', error)
       setShowVoucherAlert({ 
         show: true, 
-        message: error.message || 'Failed to claim voucher. Please try again.', 
+        message: error instanceof Error ? error.message : 'Failed to claim voucher. Please try again.', 
         type: 'error' 
       })
     } finally {
@@ -941,7 +891,7 @@ export default function ProductsPage() {
                       {claimingVoucher === voucher.id ? (
                         <div className="h-4 w-4 animate-spin rounded-full border-2 border-black border-t-transparent" />
                       ) : isClaimed ? (
-                        'Claimed ✓'
+                        'Claimed'
                       ) : (
                         'Claim'
                       )}
@@ -1034,7 +984,7 @@ export default function ProductsPage() {
                           {claimingVoucher === voucher.id ? (
                             <div className="h-4 w-4 animate-spin rounded-full border-2 border-black border-t-transparent" />
                           ) : isClaimed ? (
-                            'Claimed ✓'
+                            'Claimed'
                           ) : (
                             'Claim'
                           )}
@@ -1185,5 +1135,13 @@ export default function ProductsPage() {
 
       <Footer />
     </main>
+  )
+}
+
+export default function ProductsPage() {
+  return (
+    <Suspense fallback={<ProductsLoadingFallback />}>
+      <ProductsContent />
+    </Suspense>
   )
 }

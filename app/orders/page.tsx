@@ -1,7 +1,7 @@
 // app/orders/page.tsx (Updated with cancellation requests)
 'use client'
 
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { supabase } from '@/lib/supabase'
@@ -19,13 +19,13 @@ import {
   Eye,
   Calendar,
   CreditCard,
-  MapPin,
   Filter,
   ChevronDown,
   Bell,
   AlertCircle,
   Send,
   RefreshCw,
+  Paperclip,
 } from 'lucide-react'
 
 type OrderItem = {
@@ -72,6 +72,7 @@ type Order = {
   cancelled_at: string | null
   cancellation_reason: string | null
   cancellation_request?: CancellationRequest
+  problem_report?: CancellationRequest
   order_items: OrderItem[]
   addresses: Address | null
 }
@@ -118,35 +119,16 @@ export default function OrdersPage() {
   const [submittingRequest, setSubmittingRequest] = useState(false)
   const [cancellationError, setCancellationError] = useState<string | null>(null)
   const [existingRequest, setExistingRequest] = useState<CancellationRequest | null>(null)
+  const [problemModalOpen, setProblemModalOpen] = useState(false)
+  const [selectedProblemOrderId, setSelectedProblemOrderId] = useState<number | null>(null)
+  const [problemType, setProblemType] = useState('damaged_item')
+  const [problemDetails, setProblemDetails] = useState('')
+  const [problemError, setProblemError] = useState<string | null>(null)
+  const [submittingProblem, setSubmittingProblem] = useState(false)
+  const [existingProblemReport, setExistingProblemReport] = useState<CancellationRequest | null>(null)
+  const [problemProofFiles, setProblemProofFiles] = useState<File[]>([])
 
-  useEffect(() => {
-    let isMounted = true
-    let ordersChannel: any = null
-    let notificationsChannel: any = null
-
-    const initialize = async () => {
-      await loadOrders()
-      if (isMounted) {
-        const channels = await setupRealtimeSubscription()
-        ordersChannel = channels?.ordersChannel
-        notificationsChannel = channels?.notificationsChannel
-      }
-    }
-
-    initialize()
-
-    return () => {
-      isMounted = false
-      if (ordersChannel) {
-        supabase.removeChannel(ordersChannel)
-      }
-      if (notificationsChannel) {
-        supabase.removeChannel(notificationsChannel)
-      }
-    }
-  }, [])
-
-  const setupRealtimeSubscription = async () => {
+  const setupRealtimeSubscription = useCallback(async () => {
     const { data: { session } } = await supabase.auth.getSession()
     
     if (!session) return null
@@ -202,9 +184,9 @@ export default function OrdersPage() {
     notificationsChannel.subscribe()
 
     return { ordersChannel, notificationsChannel }
-  }
+  }, [])
 
-  const loadOrders = async () => {
+  const loadOrders = useCallback(async () => {
     try {
       setLoading(true)
 
@@ -246,7 +228,8 @@ export default function OrdersPage() {
       if (ordersError) throw ordersError
 
       // Fetch cancellation requests for these orders
-      const orderIds = (ordersData || []).map((o: any) => o.id)
+      const loadedOrders = ((ordersData || []) as unknown) as Order[]
+      const orderIds = loadedOrders.map((order) => order.id)
       if (orderIds.length > 0) {
         const { data: requestsData } = await supabase
           .from('cancellation_requests')
@@ -255,21 +238,31 @@ export default function OrdersPage() {
           .eq('user_id', session.user.id)
 
         // Merge cancellation requests into orders
-        const ordersWithRequests = (ordersData || []).map((order: any) => ({
-          ...order,
-          cancellation_request: requestsData?.find((r: any) => r.order_id === order.id)
-        }))
+        const requests = ((requestsData || []) as unknown) as CancellationRequest[]
+        const ordersWithRequests = loadedOrders.map((order) => {
+          const requestsForOrder = requests.filter((request) => request.order_id === order.id)
+
+          return {
+            ...order,
+            cancellation_request: requestsForOrder.find((request) =>
+              !String(request.reason || '').startsWith('[REFUND:')
+            ),
+            problem_report: requestsForOrder.find((request) =>
+              String(request.reason || '').startsWith('[REFUND:')
+            ),
+          }
+        })
         
-        setOrders(ordersWithRequests as any)
+        setOrders(ordersWithRequests)
       } else {
-        setOrders((ordersData as any) || [])
+        setOrders(loadedOrders)
       }
     } catch (error) {
       console.error('Error loading orders:', error)
     } finally {
       setLoading(false)
     }
-  }
+  }, [router])
 
   // Submit cancellation request (instead of direct cancellation)
   const submitCancellationRequest = async () => {
@@ -323,9 +316,13 @@ export default function OrdersPage() {
       setTimeout(() => setNewNotification(null), 5000)
       
       await loadOrders()
-    } catch (error: any) {
+    } catch (error) {
       console.error('Error submitting cancellation request:', error)
-      setCancellationError(error.message || 'Failed to submit cancellation request. Please try again.')
+      setCancellationError(
+        error instanceof Error
+          ? error.message
+          : 'Failed to submit cancellation request. Please try again.'
+      )
     } finally {
       setSubmittingRequest(false)
     }
@@ -362,9 +359,157 @@ export default function OrdersPage() {
     setExistingRequest(null)
   }
 
+  useEffect(() => {
+    let isMounted = true
+    let ordersChannel: ReturnType<typeof supabase.channel> | null = null
+    let notificationsChannel: ReturnType<typeof supabase.channel> | null = null
+
+    const initialize = async () => {
+      await loadOrders()
+
+      if (isMounted) {
+        const channels = await setupRealtimeSubscription()
+        ordersChannel = channels?.ordersChannel || null
+        notificationsChannel = channels?.notificationsChannel || null
+      }
+    }
+
+    initialize()
+
+    return () => {
+      isMounted = false
+
+      if (ordersChannel) {
+        supabase.removeChannel(ordersChannel)
+      }
+
+      if (notificationsChannel) {
+        supabase.removeChannel(notificationsChannel)
+      }
+    }
+  }, [loadOrders, setupRealtimeSubscription])
+
+  const openProblemModal = async (orderId: number) => {
+    setSelectedProblemOrderId(orderId)
+    setProblemType('damaged_item')
+    setProblemDetails('')
+    setProblemError(null)
+    setExistingProblemReport(null)
+    setProblemProofFiles([])
+
+    const { data: existingReports } = await supabase
+      .from('cancellation_requests')
+      .select('*')
+      .eq('order_id', orderId)
+      .eq('status', 'pending')
+
+    const existingRefundReport = existingReports?.find((request) =>
+      String(request.reason || '').startsWith('[REFUND:')
+    )
+
+    if (existingRefundReport) {
+      setExistingProblemReport(existingRefundReport as CancellationRequest)
+    }
+
+    setProblemModalOpen(true)
+  }
+
+  const closeProblemModal = () => {
+    setProblemModalOpen(false)
+    setSelectedProblemOrderId(null)
+    setProblemType('damaged_item')
+    setProblemDetails('')
+    setProblemError(null)
+    setExistingProblemReport(null)
+    setProblemProofFiles([])
+  }
+
+  const uploadProblemProofs = async (orderId: number, accessToken: string) => {
+    const proofUrls: string[] = []
+
+    for (const file of problemProofFiles) {
+      const formData = new FormData()
+      formData.append('orderId', String(orderId))
+      formData.append('file', file)
+
+      const response = await fetch('/api/refunds/proofs', {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+        },
+        body: formData,
+      })
+      const result = await response.json()
+
+      if (!response.ok) {
+        throw new Error(result.error || `Failed to upload ${file.name}`)
+      }
+
+      if (result.proof?.url) {
+        proofUrls.push(result.proof.url)
+      }
+    }
+
+    return proofUrls
+  }
+
+  const submitProblemReport = async () => {
+    if (!selectedProblemOrderId) return
+
+    if (!problemDetails.trim()) {
+      setProblemError('Please describe the problem with your delivered order')
+      return
+    }
+
+    setSubmittingProblem(true)
+    setProblemError(null)
+
+    try {
+      const { data: { session } } = await supabase.auth.getSession()
+      if (!session?.access_token) {
+        router.push('/login')
+        return
+      }
+
+      const proofUrls = await uploadProblemProofs(selectedProblemOrderId, session.access_token)
+      const response = await fetch('/api/refunds', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${session.access_token}`,
+        },
+        body: JSON.stringify({
+          orderId: selectedProblemOrderId,
+          reasonType: problemType,
+          details: problemDetails,
+          proofUrls,
+        }),
+      })
+      const result = await response.json()
+
+      if (!response.ok) {
+        throw new Error(result.error || 'Failed to submit problem report')
+      }
+
+      const submittedOrderId = selectedProblemOrderId
+      closeProblemModal()
+      setNewNotification(`Problem report for order #${submittedOrderId} was submitted for review`)
+      setTimeout(() => setNewNotification(null), 5000)
+      await loadOrders()
+    } catch (error) {
+      setProblemError(error instanceof Error ? error.message : 'Failed to submit problem report')
+    } finally {
+      setSubmittingProblem(false)
+    }
+  }
+
   // Check if an order can be requested for cancellation
   const canRequestCancellation = (orderStatus: string) => {
     return CANCELLABLE_STATUSES.includes(orderStatus) && orderStatus !== 'cancelled'
+  }
+
+  const canReportProblem = (order: Order) => {
+    return order.order_status === 'delivered' && order.problem_report?.status !== 'pending'
   }
 
   // Get cancellation request status badge
@@ -551,7 +696,7 @@ export default function OrdersPage() {
                         <ul className="list-disc list-inside mt-1 space-y-0.5">
                           <li>Cancellation requests require admin approval</li>
                           <li>If approved and paid, refund will be processed within 3-5 business days</li>
-                          <li>You'll be notified once your request is reviewed</li>
+                          <li>You&apos;ll be notified once your request is reviewed</li>
                         </ul>
                       </div>
                     </div>
@@ -629,6 +774,151 @@ export default function OrdersPage() {
         )}
 
         {/* Notification Banner */}
+        {problemModalOpen && selectedProblemOrderId && (
+          <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+            <div className="bg-white rounded-2xl max-w-md w-full p-6">
+              <div className="flex items-center justify-between mb-4">
+                <h2 className="text-xl font-bold text-gray-900">Report Problem</h2>
+                <button
+                  onClick={closeProblemModal}
+                  className="text-gray-400 hover:text-gray-600"
+                >
+                  <XCircle className="h-6 w-6" />
+                </button>
+              </div>
+
+              {existingProblemReport ? (
+                <div className="space-y-4">
+                  <div className="p-4 bg-yellow-50 rounded-xl border border-yellow-200">
+                    <div className="flex items-start gap-2">
+                      <RefreshCw className="h-5 w-5 text-yellow-600 mt-0.5 animate-spin" />
+                      <div>
+                        <p className="font-medium text-yellow-800">Problem Report Pending</p>
+                        <p className="text-sm text-yellow-700 mt-1">
+                          You already submitted a problem report for this order on {formatDateTime(existingProblemReport.created_at)}.
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+                  <button
+                    onClick={closeProblemModal}
+                    className="w-full px-4 py-2 bg-gray-200 text-gray-700 rounded-lg font-medium hover:bg-gray-300 transition"
+                  >
+                    Close
+                  </button>
+                </div>
+              ) : (
+                <>
+                  <div className="mb-4 p-3 bg-red-50 rounded-xl border border-red-200">
+                    <div className="flex items-start gap-2">
+                      <AlertCircle className="h-5 w-5 text-red-600 mt-0.5" />
+                      <p className="text-sm text-red-800">
+                        This report is available after delivery and will be reviewed by the refund team.
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="mb-4">
+                    <label className="block text-sm font-medium text-gray-700 mb-2">
+                      Problem type <span className="text-red-500">*</span>
+                    </label>
+                    <select
+                      value={problemType}
+                      onChange={(e) => setProblemType(e.target.value)}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-yellow-400"
+                    >
+                      <option value="damaged_item">Damaged item</option>
+                      <option value="missing_item">Missing item</option>
+                      <option value="wrong_item">Wrong item received</option>
+                      <option value="defective_item">Defective item</option>
+                      <option value="other">Other problem</option>
+                    </select>
+                  </div>
+
+                  <div className="mb-4">
+                    <label className="block text-sm font-medium text-gray-700 mb-2">
+                      Details <span className="text-red-500">*</span>
+                    </label>
+                    <textarea
+                      value={problemDetails}
+                      onChange={(e) => setProblemDetails(e.target.value)}
+                      rows={4}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-yellow-400"
+                      placeholder="Tell us what happened, which item was affected, and what you received."
+                    />
+                  </div>
+
+                  <div className="mb-4">
+                    <label className="block text-sm font-medium text-gray-700 mb-2">
+                      Proof photos or videos
+                    </label>
+                    <label className="flex cursor-pointer items-center justify-center gap-2 rounded-lg border border-dashed border-gray-300 px-3 py-3 text-sm text-gray-600 hover:bg-gray-50">
+                      <Paperclip className="h-4 w-4" />
+                      Attach proof
+                      <input
+                        type="file"
+                        accept="image/*,video/*"
+                        multiple
+                        className="hidden"
+                        onChange={(event) => {
+                          const files = Array.from(event.target.files || [])
+                            .filter((file) => file.type.startsWith('image/') || file.type.startsWith('video/'))
+                            .filter((file) => file.size <= 25 * 1024 * 1024)
+                            .slice(0, 5)
+                          setProblemProofFiles(files)
+                        }}
+                      />
+                    </label>
+                    {problemProofFiles.length > 0 && (
+                      <div className="mt-2 space-y-1">
+                        {problemProofFiles.map((file) => (
+                          <p key={`${file.name}-${file.size}`} className="text-xs text-gray-500 truncate">
+                            {file.name}
+                          </p>
+                        ))}
+                      </div>
+                    )}
+                    <p className="mt-1 text-xs text-gray-500">Up to 5 files, 25MB each.</p>
+                  </div>
+
+                  {problemError && (
+                    <div className="mb-4 p-3 bg-red-50 border border-red-200 rounded-lg">
+                      <p className="text-sm text-red-600">{problemError}</p>
+                    </div>
+                  )}
+
+                  <div className="flex gap-3">
+                    <button
+                      onClick={closeProblemModal}
+                      className="flex-1 px-4 py-2 border border-gray-300 rounded-lg text-gray-700 font-medium hover:bg-gray-50 transition"
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      onClick={submitProblemReport}
+                      disabled={submittingProblem || !problemDetails.trim()}
+                      className="flex-1 px-4 py-2 bg-red-600 text-white rounded-lg font-medium hover:bg-red-700 transition disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+                    >
+                      {submittingProblem ? (
+                        <>
+                          <Loader2 className="h-4 w-4 animate-spin" />
+                          Uploading...
+                        </>
+                      ) : (
+                        <>
+                          <Send className="h-4 w-4" />
+                          Submit Report
+                        </>
+                      )}
+                    </button>
+                  </div>
+                </>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* Notification Banner */}
         {newNotification && (
           <div className="mb-4 p-4 bg-blue-100 border border-blue-400 text-blue-700 rounded-xl flex items-center justify-between">
             <div className="flex items-center gap-2">
@@ -687,7 +977,7 @@ export default function OrdersPage() {
                   <label className="block text-sm font-medium text-gray-700 mb-2">Date Range</label>
                   <select
                     value={dateRange}
-                    onChange={(e) => setDateRange(e.target.value as any)}
+                    onChange={(e) => setDateRange(e.target.value as 'all' | 'week' | 'month' | 'year')}
                     className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-yellow-400"
                   >
                     <option value="all">All Time</option>
@@ -701,7 +991,7 @@ export default function OrdersPage() {
                   <label className="block text-sm font-medium text-gray-700 mb-2">Sort By</label>
                   <select
                     value={sortBy}
-                    onChange={(e) => setSortBy(e.target.value as any)}
+                    onChange={(e) => setSortBy(e.target.value as 'newest' | 'oldest' | 'highest' | 'lowest')}
                     className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-yellow-400"
                   >
                     <option value="newest">Newest First</option>
@@ -854,6 +1144,23 @@ export default function OrdersPage() {
                           <div className="text-center text-sm text-yellow-600 bg-yellow-50 p-2 rounded-lg">
                             <RefreshCw className="h-4 w-4 inline mr-1 animate-spin" />
                             Cancellation request pending admin approval
+                          </div>
+                        )}
+
+                        {canReportProblem(order) && (
+                          <button
+                            onClick={() => openProblemModal(order.id)}
+                            className="w-full flex items-center justify-center gap-2 rounded-xl border border-red-300 bg-white text-red-600 py-2.5 font-medium hover:bg-red-50 transition"
+                          >
+                            <AlertCircle className="h-4 w-4" />
+                            Report Problem
+                          </button>
+                        )}
+
+                        {order.problem_report?.status === 'pending' && (
+                          <div className="text-center text-sm text-red-600 bg-red-50 p-2 rounded-lg">
+                            <RefreshCw className="h-4 w-4 inline mr-1 animate-spin" />
+                            Problem report pending refund review
                           </div>
                         )}
 

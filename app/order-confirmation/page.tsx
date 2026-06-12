@@ -382,7 +382,7 @@ function OrderConfirmationContent() {
                           </div>
                           <span className="text-xs mt-2 font-medium capitalize">{status.replace('_', ' ')}</span>
                           {isCompleted && status !== 'delivered' && (
-                            <span className="text-[10px] text-green-600 mt-0.5">✓ Complete</span>
+                            <span className="text-[10px] text-green-600 mt-0.5">Complete</span>
                           )}
                         </div>
                       )
@@ -526,7 +526,7 @@ function OrderConfirmationContent() {
                     <p>
                       {order.addresses.province}, {order.addresses.zip_code}
                     </p>
-                    <p>📞 {order.addresses.phone_number}</p>
+                    <p>{order.addresses.phone_number}</p>
                   </div>
                 )}
               </div>
@@ -654,7 +654,7 @@ function OrderConfirmationContent() {
                         Premium Automotive Parts & Accessories
                       </p>
                       <p className="text-gray-400 text-xs mt-1">
-                        www.rocars.com | support@rocars.com | 📞 (02) 1234 5678
+                        www.rocars.com | support@rocars.com | (02) 1234 5678
                       </p>
                       <div className="mt-3">
                         <p className="text-lg font-semibold text-gray-800">OFFICIAL ORDER RECEIPT</p>

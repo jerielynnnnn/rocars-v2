@@ -275,7 +275,7 @@ export default function MyVouchersPage() {
                     <div className="flex justify-end mb-2">
                       {voucher.used_in_order ? (
                         <span className="text-xs font-medium px-2 py-1 rounded-full bg-gray-200 text-gray-600">
-                          Used ✓
+                          Used
                         </span>
                       ) : isExpired ? (
                         <span className="text-xs font-medium px-2 py-1 rounded-full bg-red-100 text-red-600">

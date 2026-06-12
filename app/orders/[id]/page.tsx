@@ -1,13 +1,13 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import { supabase } from '@/lib/supabase';
 import Link from 'next/link';
 import { 
   Package, Truck, CheckCircle, Clock, MapPin, 
   Calendar, ArrowLeft, RefreshCw, Star, AlertCircle,
-  XCircle, Loader2, Home
+  XCircle, Loader2, Home, Paperclip
 } from 'lucide-react';
 
 interface ProductImage {
@@ -48,6 +48,14 @@ interface StatusHistory {
   created_at: string;
 }
 
+interface Refund {
+  id: number;
+  reason: string;
+  refund_status: 'pending' | 'approved' | 'rejected' | 'completed';
+  admin_response: string | null;
+  created_at: string;
+}
+
 interface Order {
   id: number;
   order_status: string;
@@ -65,6 +73,11 @@ interface Order {
   order_items: OrderItem[];
   addresses: Address;
   order_status_history: StatusHistory[];
+  refunds: Refund[];
+}
+
+function getErrorMessage(err: unknown) {
+  return err instanceof Error ? err.message : 'Something went wrong';
 }
 
 export default function OrderTrackingPage() {
@@ -76,18 +89,16 @@ export default function OrderTrackingPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [showRefundModal, setShowRefundModal] = useState(false);
+  const [refundReasonType, setRefundReasonType] = useState('damaged_item');
   const [refundReason, setRefundReason] = useState('');
+  const [refundProofFiles, setRefundProofFiles] = useState<File[]>([]);
   const [submittingRefund, setSubmittingRefund] = useState(false);
   const [showRatingModal, setShowRatingModal] = useState(false);
   const [rating, setRating] = useState(0);
   const [ratingComment, setRatingComment] = useState('');
   const [submittingRating, setSubmittingRating] = useState(false);
 
-  useEffect(() => {
-    fetchOrder();
-  }, [orderId]);
-
-  const fetchOrder = async () => {
+  const fetchOrder = useCallback(async () => {
     setLoading(true);
     try {
       const { data: { user }, error: userError } = await supabase.auth.getUser();
@@ -115,7 +126,8 @@ export default function OrderTrackingPage() {
             )
           ),
           addresses!orders_address_id_fkey (*),
-          order_status_history (*)
+          order_status_history (*),
+          refunds (*)
         `)
         .eq('id', orderId)
         .eq('user_id', user.id)
@@ -123,12 +135,46 @@ export default function OrderTrackingPage() {
 
       if (error) throw error;
       setOrder(data);
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.error('Error fetching order:', err);
-      setError(err.message);
+      setError(getErrorMessage(err));
     } finally {
       setLoading(false);
     }
+  }, [orderId, router]);
+
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    fetchOrder();
+  }, [fetchOrder]);
+
+  const uploadRefundProofs = async (accessToken: string) => {
+    const proofUrls: string[] = [];
+
+    for (const file of refundProofFiles) {
+      const formData = new FormData();
+      formData.append('orderId', orderId);
+      formData.append('file', file);
+
+      const response = await fetch('/api/refunds/proofs', {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+        },
+        body: formData,
+      });
+      const result = await response.json();
+
+      if (!response.ok) {
+        throw new Error(result.error || `Failed to upload ${file.name}`);
+      }
+
+      if (result.proof?.url) {
+        proofUrls.push(result.proof.url);
+      }
+    }
+
+    return proofUrls;
   };
 
   const handleRequestRefund = async () => {
@@ -136,22 +182,40 @@ export default function OrderTrackingPage() {
     
     setSubmittingRefund(true);
     try {
-      const { data: { user } } = await supabase.auth.getUser();
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session?.access_token) {
+        router.push('/login');
+        return;
+      }
       
-      const { error } = await supabase.rpc('request_refund', {
-        p_order_id: parseInt(orderId),
-        p_user_id: user?.id,
-        p_reason: refundReason
+      const proofUrls = await uploadRefundProofs(session.access_token);
+      const response = await fetch('/api/refunds', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${session.access_token}`,
+        },
+        body: JSON.stringify({
+          orderId: parseInt(orderId),
+          reasonType: refundReasonType,
+          details: refundReason,
+          proofUrls,
+        }),
       });
+      const result = await response.json();
 
-      if (error) throw error;
+      if (!response.ok) {
+        throw new Error(result.error || 'Failed to submit refund request');
+      }
       
       alert('Refund request submitted successfully!');
       setShowRefundModal(false);
+      setRefundReasonType('damaged_item');
       setRefundReason('');
+      setRefundProofFiles([]);
       fetchOrder();
-    } catch (err: any) {
-      alert('Error: ' + err.message);
+    } catch (err: unknown) {
+      alert('Error: ' + getErrorMessage(err));
     } finally {
       setSubmittingRefund(false);
     }
@@ -177,8 +241,8 @@ export default function OrderTrackingPage() {
       setShowRatingModal(false);
       setRating(0);
       setRatingComment('');
-    } catch (err: any) {
-      alert('Error: ' + err.message);
+    } catch (err: unknown) {
+      alert('Error: ' + getErrorMessage(err));
     } finally {
       setSubmittingRating(false);
     }
@@ -241,7 +305,12 @@ export default function OrderTrackingPage() {
 
   const canRequestRefund = () => {
     if (!order) return false;
-    return order.order_status === 'delivered' && order.payment_status === 'paid';
+    const activeRefund = order.refunds?.find(refund =>
+      ['pending', 'approved'].includes(refund.refund_status)
+    );
+    return order.order_status === 'delivered'
+      && order.payment_status === 'paid'
+      && !activeRefund;
   };
 
   const canRate = () => {
@@ -280,6 +349,11 @@ export default function OrderTrackingPage() {
   }
 
   const currentStepIndex = getCurrentStepIndex();
+  const latestRefund = order.refunds
+    ? [...order.refunds].sort((a, b) =>
+        new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+      )[0]
+    : null;
 
   return (
     <div className="min-h-screen bg-[#f8f9fa] pt-20">
@@ -453,7 +527,7 @@ export default function OrderTrackingPage() {
               <p className="text-gray-600 text-sm">
                 {order.addresses.province} {order.addresses.zip_code}
               </p>
-              <p className="text-gray-600 text-sm">📞 {order.addresses.phone_number}</p>
+              <p className="text-gray-600 text-sm">{order.addresses.phone_number}</p>
             </div>
           </div>
         )}
@@ -477,6 +551,37 @@ export default function OrderTrackingPage() {
           </div>
         </div>
 
+        {latestRefund && (
+          <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-6 mb-6">
+            <h2 className="text-xl font-semibold mb-4 flex items-center gap-2">
+              <RefreshCw className="h-5 w-5 text-gray-600" />
+              Refund Request
+            </h2>
+            <div className="rounded-xl border border-gray-200 bg-gray-50 p-4 space-y-3">
+              <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
+                <p className="text-sm font-medium text-gray-900">
+                  Request #{latestRefund.id}
+                </p>
+                <span className={`inline-flex w-fit px-3 py-1 rounded-full text-xs font-semibold ${
+                  latestRefund.refund_status === 'pending' ? 'bg-yellow-100 text-yellow-700' :
+                  latestRefund.refund_status === 'approved' ? 'bg-green-100 text-green-700' :
+                  latestRefund.refund_status === 'rejected' ? 'bg-red-100 text-red-700' :
+                  'bg-blue-100 text-blue-700'
+                }`}>
+                  {latestRefund.refund_status.toUpperCase()}
+                </span>
+              </div>
+              <p className="text-sm text-gray-700">{latestRefund.reason}</p>
+              {latestRefund.admin_response && (
+                <div className="rounded-lg bg-white border border-gray-200 p-3">
+                  <p className="text-xs font-medium text-gray-500 mb-1">Admin Response</p>
+                  <p className="text-sm text-gray-700">{latestRefund.admin_response}</p>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
         {/* Action Buttons */}
         <div className="flex gap-3">
           {canRate() && (
@@ -495,7 +600,7 @@ export default function OrderTrackingPage() {
               className="flex-1 flex items-center justify-center gap-2 px-6 py-3 bg-red-600 text-white rounded-xl font-semibold hover:bg-red-700 transition"
             >
               <AlertCircle className="h-5 w-5" />
-              Request Refund
+              Report Issue / Refund
             </button>
           )}
 
@@ -516,7 +621,10 @@ export default function OrderTrackingPage() {
             <div className="flex justify-between items-center mb-4">
               <h2 className="text-xl font-bold">Request Refund</h2>
               <button
-                onClick={() => setShowRefundModal(false)}
+                onClick={() => {
+                  setShowRefundModal(false);
+                  setRefundProofFiles([]);
+                }}
                 className="text-gray-400 hover:text-gray-600"
               >
                 <XCircle className="h-6 w-6" />
@@ -525,15 +633,62 @@ export default function OrderTrackingPage() {
             <p className="text-sm text-gray-600 mb-4">
               Order #{order.id} - {formatPrice(order.total_amount)}
             </p>
+            <label className="block text-sm font-medium text-gray-700 mb-2">
+              What happened?
+            </label>
+            <select
+              value={refundReasonType}
+              onChange={(e) => setRefundReasonType(e.target.value)}
+              className="w-full p-3 border border-gray-300 rounded-lg mb-4 focus:ring-2 focus:ring-black focus:border-black"
+            >
+              <option value="missing_item">Missing item</option>
+              <option value="damaged_item">Damaged item</option>
+              <option value="wrong_item">Wrong item received</option>
+              <option value="defective_item">Defective item</option>
+              <option value="other">Other issue</option>
+            </select>
             <textarea
               value={refundReason}
               onChange={(e) => setRefundReason(e.target.value)}
-              placeholder="Please explain why you're requesting a refund..."
+              placeholder="Please describe the issue, affected item, and any details the refund team should review..."
               className="w-full p-3 border border-gray-300 rounded-lg h-32 mb-4 focus:ring-2 focus:ring-black focus:border-black resize-none"
             />
+            <label className="block text-sm font-medium text-gray-700 mb-2">
+              Proof photos or videos
+            </label>
+            <label className="mb-2 flex cursor-pointer items-center justify-center gap-2 rounded-lg border border-dashed border-gray-300 px-3 py-3 text-sm text-gray-600 hover:bg-gray-50">
+              <Paperclip className="h-4 w-4" />
+              Attach proof
+              <input
+                type="file"
+                accept="image/*,video/*"
+                multiple
+                className="hidden"
+                onChange={(event) => {
+                  const files = Array.from(event.target.files || [])
+                    .filter((file) => file.type.startsWith('image/') || file.type.startsWith('video/'))
+                    .filter((file) => file.size <= 25 * 1024 * 1024)
+                    .slice(0, 5);
+                  setRefundProofFiles(files);
+                }}
+              />
+            </label>
+            {refundProofFiles.length > 0 && (
+              <div className="mb-2 space-y-1">
+                {refundProofFiles.map((file) => (
+                  <p key={`${file.name}-${file.size}`} className="text-xs text-gray-500 truncate">
+                    {file.name}
+                  </p>
+                ))}
+              </div>
+            )}
+            <p className="mb-4 text-xs text-gray-500">Up to 5 files, 25MB each.</p>
             <div className="flex gap-3">
               <button
-                onClick={() => setShowRefundModal(false)}
+                onClick={() => {
+                  setShowRefundModal(false);
+                  setRefundProofFiles([]);
+                }}
                 className="flex-1 px-4 py-2 border border-gray-300 rounded-lg hover:bg-gray-50 transition"
               >
                 Cancel
@@ -543,7 +698,7 @@ export default function OrderTrackingPage() {
                 disabled={!refundReason.trim() || submittingRefund}
                 className="flex-1 px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 transition disabled:opacity-50"
               >
-                {submittingRefund ? 'Submitting...' : 'Submit Request'}
+                {submittingRefund ? 'Uploading...' : 'Submit Request'}
               </button>
             </div>
           </div>

@@ -105,74 +105,42 @@ export default function DashboardPage() {
   const [timeRange, setTimeRange] = useState<'week' | 'month' | 'year'>('month')
   const [exporting, setExporting] = useState(false)
 
-  const fetchAllData = async () => {
-    setRefreshing(true)
-    await Promise.all([
-      fetchDashboardData(),
-      fetchRecentOrders(),
-      fetchTopProducts(),
-      fetchRevenueData(),
-      fetchLowStockProducts(),
-    ])
-    setLastUpdated(new Date())
-    setRefreshing(false)
+  async function getRefundedOrderIds() {
+    const refundedOrderIds = new Set<number>()
+
+    const { data: refundsData, error: refundsError } = await supabase
+      .from('refunds')
+      .select('order_id')
+      .in('refund_status', ['approved', 'completed'])
+
+    if (!refundsError) {
+      for (const refund of refundsData || []) {
+        if (refund.order_id) {
+          refundedOrderIds.add(Number(refund.order_id))
+        }
+      }
+    }
+
+    const { data: fallbackRequests, error: fallbackError } = await supabase
+      .from('cancellation_requests')
+      .select('order_id, admin_notes')
+      .eq('status', 'approved')
+
+    if (!fallbackError) {
+      for (const request of fallbackRequests || []) {
+        if (
+          request.order_id
+          && String(request.admin_notes || '').match(/\[REFUND_STATUS:(approved|completed)\]/)
+        ) {
+          refundedOrderIds.add(Number(request.order_id))
+        }
+      }
+    }
+
+    return refundedOrderIds
   }
 
-  useEffect(() => {
-    fetchAllData()
-
-    // Set up real-time subscriptions
-    const ordersChannel = supabase
-      .channel('dashboard-orders')
-      .on(
-        'postgres_changes',
-        { event: '*', schema: 'public', table: 'orders' },
-        () => {
-          fetchAllData()
-        }
-      )
-      .subscribe()
-
-    const productsChannel = supabase
-      .channel('dashboard-products')
-      .on(
-        'postgres_changes',
-        { event: '*', schema: 'public', table: 'products' },
-        () => {
-          fetchDashboardData()
-          fetchTopProducts()
-          fetchLowStockProducts()
-        }
-      )
-      .subscribe()
-
-    const profilesChannel = supabase
-      .channel('dashboard-profiles')
-      .on(
-        'postgres_changes',
-        { event: '*', schema: 'public', table: 'profiles' },
-        () => fetchDashboardData()
-      )
-      .subscribe()
-
-    const refundsChannel = supabase
-      .channel('dashboard-refunds')
-      .on(
-        'postgres_changes',
-        { event: '*', schema: 'public', table: 'refunds' },
-        () => fetchDashboardData()
-      )
-      .subscribe()
-
-    return () => {
-      ordersChannel.unsubscribe()
-      productsChannel.unsubscribe()
-      profilesChannel.unsubscribe()
-      refundsChannel.unsubscribe()
-    }
-  }, [timeRange])
-
-  const fetchDashboardData = async () => {
+  async function fetchDashboardData() {
     try {
       // Get today's date range
       const today = new Date()
@@ -207,23 +175,29 @@ export default function DashboardPage() {
         .gte('created_at', yesterday.toISOString())
         .lt('created_at', today.toISOString())
 
-      // Fetch total revenue (paid orders)
+      const refundedOrderIds = await getRefundedOrderIds()
+
+      // Fetch total revenue (paid orders minus approved/completed refunds)
       const { data: revenueData } = await supabase
         .from('orders')
-        .select('total_amount')
+        .select('id, total_amount')
         .eq('payment_status', 'paid')
 
-      const totalRevenue = revenueData?.reduce((sum, order) => sum + (order.total_amount || 0), 0) || 0
+      const totalRevenue = revenueData
+        ?.filter((order) => !refundedOrderIds.has(Number(order.id)))
+        .reduce((sum, order) => sum + (order.total_amount || 0), 0) || 0
 
-      // Fetch revenue yesterday
+      // Fetch revenue yesterday (paid orders minus approved/completed refunds)
       const { data: revenueYesterdayData } = await supabase
         .from('orders')
-        .select('total_amount')
+        .select('id, total_amount')
         .eq('payment_status', 'paid')
         .gte('created_at', yesterday.toISOString())
         .lt('created_at', today.toISOString())
 
-      const revenueYesterday = revenueYesterdayData?.reduce((sum, order) => sum + (order.total_amount || 0), 0) || 0
+      const revenueYesterday = revenueYesterdayData
+        ?.filter((order) => !refundedOrderIds.has(Number(order.id)))
+        .reduce((sum, order) => sum + (order.total_amount || 0), 0) || 0
 
       // Fetch order status counts
       const { count: pendingOrders } = await supabase
@@ -275,7 +249,7 @@ export default function DashboardPage() {
     }
   }
 
-  const fetchRecentOrders = async () => {
+  async function fetchRecentOrders() {
     try {
       const { data: orders, error } = await supabase
         .from('orders')
@@ -318,7 +292,7 @@ export default function DashboardPage() {
     }
   }
 
-  const fetchTopProducts = async () => {
+  async function fetchTopProducts() {
     try {
       const { data, error } = await supabase
         .from('order_items')
@@ -333,7 +307,7 @@ export default function DashboardPage() {
               image_url
             )
           )
-        `) as { data: OrderItemWithProduct[] | null; error: any }
+        `) as { data: OrderItemWithProduct[] | null; error: unknown }
 
       if (error) throw error
 
@@ -371,7 +345,7 @@ export default function DashboardPage() {
     }
   }
 
-  const fetchRevenueData = async () => {
+  async function fetchRevenueData() {
     try {
       const startDate = new Date()
       
@@ -387,9 +361,11 @@ export default function DashboardPage() {
           break
       }
 
+      const refundedOrderIds = await getRefundedOrderIds()
+
       const { data, error } = await supabase
         .from('orders')
-        .select('total_amount, created_at')
+        .select('id, total_amount, created_at')
         .eq('payment_status', 'paid')
         .gte('created_at', startDate.toISOString())
         .order('created_at', { ascending: true })
@@ -400,6 +376,8 @@ export default function DashboardPage() {
       const revenueByDate = new Map<string, number>()
       
       for (const order of data || []) {
+        if (refundedOrderIds.has(Number(order.id))) continue
+
         const date = new Date(order.created_at).toISOString().split('T')[0]
         const currentRevenue = revenueByDate.get(date) || 0
         revenueByDate.set(date, currentRevenue + (order.total_amount || 0))
@@ -416,7 +394,7 @@ export default function DashboardPage() {
     }
   }
 
-  const fetchLowStockProducts = async () => {
+  async function fetchLowStockProducts() {
     try {
       const { data, error } = await supabase
         .from('products')
@@ -434,6 +412,74 @@ export default function DashboardPage() {
       setLowStockProducts([])
     }
   }
+
+  async function fetchAllData() {
+    setRefreshing(true)
+    await Promise.all([
+      fetchDashboardData(),
+      fetchRecentOrders(),
+      fetchTopProducts(),
+      fetchRevenueData(),
+      fetchLowStockProducts(),
+    ])
+    setLastUpdated(new Date())
+    setRefreshing(false)
+  }
+
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    void fetchAllData()
+
+    // Set up real-time subscriptions
+    const ordersChannel = supabase
+      .channel('dashboard-orders')
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'orders' },
+        () => {
+          fetchAllData()
+        }
+      )
+      .subscribe()
+
+    const productsChannel = supabase
+      .channel('dashboard-products')
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'products' },
+        () => {
+          fetchDashboardData()
+          fetchTopProducts()
+          fetchLowStockProducts()
+        }
+      )
+      .subscribe()
+
+    const profilesChannel = supabase
+      .channel('dashboard-profiles')
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'profiles' },
+        () => fetchDashboardData()
+      )
+      .subscribe()
+
+    const refundsChannel = supabase
+      .channel('dashboard-refunds')
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'refunds' },
+        () => fetchDashboardData()
+      )
+      .subscribe()
+
+    return () => {
+      ordersChannel.unsubscribe()
+      productsChannel.unsubscribe()
+      profilesChannel.unsubscribe()
+      refundsChannel.unsubscribe()
+    }
+  }, [timeRange])
 
   const exportDashboardData = async () => {
     setExporting(true)
@@ -632,7 +678,7 @@ export default function DashboardPage() {
         <div>
           <h1 className="text-3xl font-bold text-gray-900">Dashboard</h1>
           <p className="text-sm text-gray-500 mt-1">
-            Overview of your store's performance
+            Overview of your store&apos;s performance
           </p>
         </div>
         

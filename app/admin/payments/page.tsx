@@ -1,7 +1,7 @@
 // app/admin/payments/page.tsx
 'use client'
 
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { supabase } from '@/lib/supabase'
 import { logAdminActivity } from '@/lib/admin-activity'
 import {
@@ -58,6 +58,7 @@ const ITEMS_PER_PAGE = 10
 
 export default function AdminPaymentsPage() {
   const [payments, setPayments] = useState<EnrichedPayment[]>([])
+  const [orderBackedRevenue, setOrderBackedRevenue] = useState(0)
   const [loading, setLoading] = useState(true)
   const [searchTerm, setSearchTerm] = useState('')
   const [statusFilter, setStatusFilter] = useState('all')
@@ -66,26 +67,7 @@ export default function AdminPaymentsPage() {
   const [updatingStatus, setUpdatingStatus] = useState(false)
   const [updatingPaymentId, setUpdatingPaymentId] = useState<number | null>(null)
 
-  useEffect(() => {
-    fetchPayments()
-    
-    const subscription = supabase
-      .channel('payments-changes')
-      .on(
-        'postgres_changes',
-        { event: '*', schema: 'public', table: 'payments' },
-        () => {
-          fetchPayments()
-        }
-      )
-      .subscribe()
-
-    return () => {
-      subscription.unsubscribe()
-    }
-  }, [])
-
-  const fetchPayments = async () => {
+  const fetchPayments = useCallback(async () => {
     setLoading(true)
 
     try {
@@ -107,12 +89,33 @@ export default function AdminPaymentsPage() {
       }
 
       setPayments(result.payments || [])
+      setOrderBackedRevenue(Number(result.totalRevenue || 0))
     } catch (error) {
       console.error('Error fetching payments:', error)
     } finally {
       setLoading(false)
     }
-  }
+  }, [])
+
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    fetchPayments()
+    
+    const subscription = supabase
+      .channel('payments-changes')
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'payments' },
+        () => {
+          fetchPayments()
+        }
+      )
+      .subscribe()
+
+    return () => {
+      subscription.unsubscribe()
+    }
+  }, [fetchPayments])
 
   // ============================================
   // COMPLETELY REWRITTEN updatePaymentStatus with detailed error logging
@@ -168,12 +171,12 @@ export default function AdminPaymentsPage() {
     console.log('Order ID:', orderId)
 
     // Step 1: Update payment status
-    const updateData: any = { payment_status: newStatus }
+    const updateData: Record<string, string> = { payment_status: newStatus }
     if (newStatus === 'paid') {
       updateData.paid_at = new Date().toISOString()
     }
 
-    const { data: updatedPayment, error: paymentError } = await supabase
+    const { error: paymentError } = await supabase
       .from('payments')
       .update(updateData)
       .eq('id', paymentId)
@@ -260,7 +263,7 @@ export default function AdminPaymentsPage() {
         } else if (orderData) {
           const notificationData = {
             user_id: orderData.user_id,
-            title: 'Payment Confirmed ✅',
+            title: 'Payment Confirmed',
             message: `Your payment for order #${orderId} has been confirmed. Your order is now being processed.`,
             is_read: false
           }
@@ -323,7 +326,7 @@ export default function AdminPaymentsPage() {
                 action: 'create-notification',
                 notificationData: {
                   user_id: orderData.user_id,
-                  title: 'Payment Failed ❌',
+                  title: 'Payment Failed',
                   message: `Your payment for order #${orderId} has failed. Please try again or contact support.`,
                   is_read: false,
                   type: 'general',
@@ -366,10 +369,11 @@ export default function AdminPaymentsPage() {
     console.log('=== UPDATE PAYMENT STATUS COMPLETED SUCCESSFULLY ===')
     alert(`Payment marked as ${newStatus.toUpperCase()} successfully!`)
 
-  } catch (error: any) {
+  } catch (error) {
     console.error('=== UPDATE PAYMENT STATUS FAILED ===')
-    console.error('Error message:', error?.message)
-    alert(`Failed to update payment status: ${error?.message || 'Unknown error'}`)
+    const message = error instanceof Error ? error.message : 'Unknown error'
+    console.error('Error message:', message)
+    alert(`Failed to update payment status: ${message}`)
   } finally {
     setUpdatingPaymentId(null)
     setUpdatingStatus(false)
@@ -401,9 +405,7 @@ export default function AdminPaymentsPage() {
     currentPage * ITEMS_PER_PAGE
   )
 
-  const totalRevenue = payments
-    .filter((p) => p.payment_status === 'paid')
-    .reduce((sum, p) => sum + Number(p.amount), 0)
+  const totalRevenue = orderBackedRevenue
 
   const paidCount = payments.filter(
     (p) => p.payment_status === 'paid'
@@ -758,7 +760,7 @@ export default function AdminPaymentsPage() {
                 onClick={() => setSelectedPayment(null)}
                 className="h-10 w-10 rounded-lg hover:bg-gray-100 flex items-center justify-center"
               >
-                ✕
+                X
               </button>
             </div>
 

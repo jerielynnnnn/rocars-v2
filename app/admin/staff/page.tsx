@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { supabase } from '@/lib/supabase'
 import { removeStaff } from '@/app/actions/removeStaff'
@@ -74,7 +74,7 @@ export default function StaffManagement() {
   // Fetch staff members
   // Replace the existing fetchStaffMembers function with this:
 
-const fetchStaffMembers = async () => {
+const fetchStaffMembers = useCallback(async () => {
   setLoading(true)
   setError(null)
   try {
@@ -110,10 +110,11 @@ const fetchStaffMembers = async () => {
   } finally {
     setLoading(false)
   }
-}
+}, [router])
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     fetchStaffMembers()
-  }, [])
+  }, [fetchStaffMembers])
 
   // Filter staff members
   const filteredStaff = staffMembers.filter(staff => {
@@ -668,7 +669,7 @@ const fetchStaffMembers = async () => {
               <p className="text-gray-700">
                 Are you sure you want to remove <span className="font-semibold text-gray-900">
                   {selectedStaff.first_name || selectedStaff.username || selectedStaff.email?.split('@')[0]}
-                </span>'s staff access?
+                </span>&apos;s staff access?
               </p>
               <p className="text-sm text-gray-500 mt-2">
                 This will change their role to customer. They will no longer have access to the admin panel.

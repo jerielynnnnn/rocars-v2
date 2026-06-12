@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { Suspense, useEffect, useState } from 'react'
 import { useSearchParams, useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { supabase } from '@/lib/supabase'
@@ -12,7 +12,7 @@ import {
   XCircle,
 } from 'lucide-react'
 
-export default function OrderSuccessPage() {
+function OrderSuccessContent() {
   const router = useRouter()
   const searchParams = useSearchParams()
 
@@ -202,5 +202,13 @@ export default function OrderSuccessPage() {
         </div>
       </div>
     </main>
+  )
+}
+
+export default function OrderSuccessPage() {
+  return (
+    <Suspense fallback={<div className="min-h-screen bg-[#f8f9fa] flex items-center justify-center text-gray-600">Loading order status...</div>}>
+      <OrderSuccessContent />
+    </Suspense>
   )
 }

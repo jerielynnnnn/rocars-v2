@@ -148,7 +148,7 @@ export default function SupportPage() {
     },
     {
       question: 'How do I use wishlists?',
-      answer: 'Click the heart icon ♥ on any product to add it to your wishlist. Access your wishlist from your account dashboard to easily reorder or monitor price drops.',
+      answer: 'Click the heart icon on any product to add it to your wishlist. Access your wishlist from your account dashboard to easily reorder or monitor price drops.',
       icon: Heart,
     },
     {

@@ -1,14 +1,15 @@
 // app/admin/settings/page.tsx
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, type ChangeEvent } from 'react'
 import { supabase } from '@/lib/supabase'
 import TwoFactorSetup from '@/components/TwoFactorSetup'
+import Image from 'next/image'
 import {
   Shield, Key, Bell, User, Globe, Database,
   Activity, Eye, EyeOff, Save, RefreshCw,
   CheckCircle, AlertCircle, Loader2, ChevronRight,
-  Fingerprint, ShieldAlert, Trash2, Plus
+  Fingerprint, ShieldAlert, Trash2, Plus, Camera
 } from 'lucide-react'
 
 interface AdminSettings {
@@ -37,14 +38,32 @@ interface AdminLog {
   created_at: string
 }
 
+interface AdminProfile {
+  id: string
+  username: string
+  first_name: string
+  last_name: string
+  middle_name: string
+  email: string
+  phone_number: string
+  role: string
+  avatar_url: string | null
+  created_at: string
+}
+
 export default function AdminSettingsPage() {
-  const [activeTab, setActiveTab] = useState('security')
+  const [activeTab, setActiveTab] = useState('profile')
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [saveSuccess, setSaveSuccess] = useState(false)
   const [adminEmail, setAdminEmail] = useState('')
   const [adminName, setAdminName] = useState('')
   const [adminRole, setAdminRole] = useState('')
+  const [adminProfile, setAdminProfile] = useState<AdminProfile | null>(null)
+  const [profileSaving, setProfileSaving] = useState(false)
+  const [avatarUploading, setAvatarUploading] = useState(false)
+  const [profileMessage, setProfileMessage] = useState('')
+  const [profileMessageType, setProfileMessageType] = useState<'success' | 'error'>('success')
   const [showTwoFactorSetup, setShowTwoFactorSetup] = useState(false)
   const [twoFactorBusy, setTwoFactorBusy] = useState(false)
   
@@ -107,17 +126,161 @@ export default function AdminSettingsPage() {
         
         const { data: profile } = await supabase
           .from('profiles')
-          .select('first_name, last_name, role')
+          .select('id, username, first_name, last_name, middle_name, email, phone_number, role, avatar_url, created_at')
           .eq('id', user.id)
           .single()
         
         if (profile) {
-          setAdminName(`${profile.first_name} ${profile.last_name}`)
-          setAdminRole(profile.role)
+          const fullName = [profile.first_name, profile.last_name].filter(Boolean).join(' ')
+          setAdminName(fullName || profile.username || user.email?.split('@')[0] || 'Admin user')
+          setAdminRole(profile.role || '')
+          setAdminProfile({
+            id: user.id,
+            username: profile.username || user.email?.split('@')[0] || '',
+            first_name: profile.first_name || '',
+            last_name: profile.last_name || '',
+            middle_name: profile.middle_name || '',
+            email: profile.email || user.email || '',
+            phone_number: profile.phone_number || '',
+            role: profile.role || '',
+            avatar_url: profile.avatar_url || null,
+            created_at: profile.created_at || user.created_at || new Date().toISOString(),
+          })
         }
       }
     } catch (error) {
       console.error('Error fetching admin data:', error)
+    }
+  }
+
+  const showProfileNotice = (message: string, type: 'success' | 'error') => {
+    setProfileMessage(message)
+    setProfileMessageType(type)
+    window.setTimeout(() => setProfileMessage(''), 3500)
+  }
+
+  const getRoleDisplayName = (role: string) => {
+    switch (role) {
+      case 'admin':
+        return 'Super Administrator'
+      case 'staff':
+        return 'Staff Manager'
+      case 'staff_orders':
+        return 'Orders Staff'
+      case 'staff_shipping':
+        return 'Shipping Staff'
+      case 'staff_payments':
+        return 'Payments Staff'
+      case 'staff_orders_shipping':
+        return 'Orders + Shipping Staff'
+      case 'staff_orders_payments':
+        return 'Orders + Payments Staff'
+      case 'staff_shipping_payments':
+        return 'Shipping + Payments Staff'
+      default:
+        return 'Staff'
+    }
+  }
+
+  const saveAdminProfile = async () => {
+    if (!adminProfile) return
+
+    setProfileSaving(true)
+    setProfileMessage('')
+
+    try {
+      const nextProfile = {
+        username: adminProfile.username.trim(),
+        first_name: adminProfile.first_name.trim(),
+        last_name: adminProfile.last_name.trim(),
+        middle_name: adminProfile.middle_name.trim(),
+        phone_number: adminProfile.phone_number.trim(),
+        updated_at: new Date().toISOString(),
+      }
+
+      if (!nextProfile.username) {
+        throw new Error('Username is required')
+      }
+
+      const { error } = await supabase
+        .from('profiles')
+        .update(nextProfile)
+        .eq('id', adminProfile.id)
+
+      if (error) throw error
+
+      const nextName = [nextProfile.first_name, nextProfile.last_name].filter(Boolean).join(' ')
+      setAdminName(nextName || nextProfile.username)
+      setAdminProfile(prev => prev ? { ...prev, ...nextProfile } : null)
+      await logAdminAction('UPDATE_PROFILE', {
+        fields: ['username', 'first_name', 'middle_name', 'last_name', 'phone_number'],
+      })
+      showProfileNotice('Profile details saved successfully.', 'success')
+    } catch (error) {
+      console.error('Error saving admin profile:', error)
+      showProfileNotice(error instanceof Error ? error.message : 'Failed to save profile details.', 'error')
+    } finally {
+      setProfileSaving(false)
+    }
+  }
+
+  const uploadProfilePhoto = async (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0]
+    event.target.value = ''
+
+    if (!file || !adminProfile) return
+
+    const allowedTypes = ['image/jpeg', 'image/jpg', 'image/png', 'image/gif', 'image/webp']
+    if (!allowedTypes.includes(file.type)) {
+      showProfileNotice('Upload a JPEG, PNG, GIF, or WEBP image.', 'error')
+      return
+    }
+
+    if (file.size > 2 * 1024 * 1024) {
+      showProfileNotice('Profile photo must be less than 2MB.', 'error')
+      return
+    }
+
+    setAvatarUploading(true)
+    setProfileMessage('')
+
+    try {
+      const fileExt = file.name.split('.').pop() || 'jpg'
+      const baseName = file.name.replace(/\.[^/.]+$/, '')
+      const safeName = baseName.replace(/[^a-zA-Z0-9._-]/g, '-')
+      const filePath = `avatars/${adminProfile.id}-${file.lastModified}-${safeName}.${fileExt}`
+
+      const { error: uploadError } = await supabase.storage
+        .from('avatars')
+        .upload(filePath, file, {
+          cacheControl: '3600',
+          upsert: false,
+        })
+
+      if (uploadError) throw uploadError
+
+      const { data: { publicUrl } } = supabase.storage
+        .from('avatars')
+        .getPublicUrl(filePath)
+
+      const { error: updateError } = await supabase
+        .from('profiles')
+        .update({
+          avatar_url: publicUrl,
+          updated_at: new Date().toISOString(),
+        })
+        .eq('id', adminProfile.id)
+
+      if (updateError) throw updateError
+
+      setAdminProfile(prev => prev ? { ...prev, avatar_url: publicUrl } : null)
+      await logAdminAction('UPDATE_PROFILE_PHOTO')
+      showProfileNotice('Profile photo updated successfully.', 'success')
+    } catch (error) {
+      console.error('Error uploading admin profile photo:', error)
+      showProfileNotice(error instanceof Error ? error.message : 'Failed to upload profile photo.', 'error')
+    } finally {
+      setAvatarUploading(false)
     }
   }
 
@@ -411,6 +574,7 @@ export default function AdminSettingsPage() {
   }
 
   const tabs = [
+    { id: 'profile', label: 'Profile', icon: User, description: 'Photo, name, and contact details' },
     { id: 'security', label: 'Security', icon: Shield, description: 'Password, 2FA, and access controls' },
     { id: 'audit', label: 'Audit Logs', icon: Activity, description: 'Track admin activities' },
   ]
@@ -443,33 +607,54 @@ export default function AdminSettingsPage() {
         <div>
           <div className="flex items-center gap-2 mb-1">
             <Shield className="h-6 w-6 text-black" />
-            <h1 className="text-3xl font-bold text-gray-900">Security Settings</h1>
+            <h1 className="text-3xl font-bold text-gray-900">Admin Settings</h1>
           </div>
-          <p className="text-sm text-gray-500">Manage your admin account security and preferences</p>
+          <p className="text-sm text-gray-500">Manage your profile, security, and admin preferences</p>
         </div>
         
-        <button
-          onClick={saveSettings}
-          disabled={saving}
-          className="flex items-center gap-2 px-4 py-2 bg-black text-white rounded-xl hover:bg-gray-800 transition disabled:opacity-50"
-        >
-          {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
-          {saving ? 'Saving...' : 'Save Changes'}
-        </button>
+        {activeTab === 'profile' ? (
+          <button
+            onClick={saveAdminProfile}
+            disabled={profileSaving || !adminProfile}
+            className="flex items-center gap-2 px-4 py-2 bg-black text-white rounded-xl hover:bg-gray-800 transition disabled:opacity-50"
+          >
+            {profileSaving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
+            {profileSaving ? 'Saving...' : 'Save Profile'}
+          </button>
+        ) : (
+          <button
+            onClick={saveSettings}
+            disabled={saving}
+            className="flex items-center gap-2 px-4 py-2 bg-black text-white rounded-xl hover:bg-gray-800 transition disabled:opacity-50"
+          >
+            {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
+            {saving ? 'Saving...' : 'Save Changes'}
+          </button>
+        )}
       </div>
 
       {/* Admin Info Card */}
       <div className="bg-gradient-to-r from-gray-50 to-white border border-gray-200 rounded-2xl p-6">
         <div className="flex items-center gap-4">
-          <div className="h-16 w-16 rounded-full bg-black flex items-center justify-center">
-            <User className="h-8 w-8 text-white" />
+          <div className="relative h-16 w-16 rounded-full bg-black flex items-center justify-center overflow-hidden">
+            {adminProfile?.avatar_url ? (
+              <Image
+                src={adminProfile.avatar_url}
+                alt={adminName || 'Admin profile'}
+                fill
+                sizes="64px"
+                className="object-cover"
+              />
+            ) : (
+              <User className="h-8 w-8 text-white" />
+            )}
           </div>
           <div>
             <h2 className="text-xl font-semibold text-gray-900">{adminName}</h2>
             <p className="text-gray-500">{adminEmail}</p>
             <div className="flex items-center gap-2 mt-1">
               <span className="px-2 py-0.5 bg-yellow-100 text-yellow-700 text-xs rounded-full">
-                {adminRole === 'admin' ? 'Super Administrator' : 'Administrator'}
+                {getRoleDisplayName(adminRole)}
               </span>
             </div>
           </div>
@@ -506,6 +691,174 @@ export default function AdminSettingsPage() {
           })}
         </div>
       </div>
+
+      {/* Profile Tab */}
+      {activeTab === 'profile' && (
+        <div className="space-y-6">
+          {profileMessage && (
+            <div className={`border rounded-xl p-4 flex items-center gap-3 ${
+              profileMessageType === 'success'
+                ? 'bg-green-50 border-green-200 text-green-700'
+                : 'bg-red-50 border-red-200 text-red-700'
+            }`}>
+              {profileMessageType === 'success' ? (
+                <CheckCircle className="h-5 w-5" />
+              ) : (
+                <AlertCircle className="h-5 w-5" />
+              )}
+              <p className="text-sm">{profileMessage}</p>
+            </div>
+          )}
+
+          <div className="bg-white border border-gray-200 rounded-2xl overflow-hidden">
+            <div className="px-6 py-4 border-b border-gray-200 bg-gray-50">
+              <div className="flex items-center gap-3">
+                <div className="h-10 w-10 rounded-xl bg-gray-900 flex items-center justify-center">
+                  <User className="h-5 w-5 text-white" />
+                </div>
+                <div>
+                  <h3 className="font-semibold text-gray-900">Profile Details</h3>
+                  <p className="text-sm text-gray-500">Update the admin or staff account shown across the dashboard</p>
+                </div>
+              </div>
+            </div>
+
+            {adminProfile ? (
+              <div className="p-6 space-y-6">
+                <div className="flex flex-col sm:flex-row sm:items-center gap-5">
+                  <div className="relative h-24 w-24 shrink-0">
+                    <div className="relative h-24 w-24 rounded-full bg-gray-100 border border-gray-200 overflow-hidden flex items-center justify-center">
+                      {adminProfile.avatar_url ? (
+                        <Image
+                          src={adminProfile.avatar_url}
+                          alt={adminName || adminProfile.username}
+                          fill
+                          sizes="96px"
+                          className="object-cover"
+                        />
+                      ) : (
+                        <User className="h-10 w-10 text-gray-400" />
+                      )}
+                    </div>
+                    <label className="absolute bottom-0 right-0 h-9 w-9 rounded-full bg-black text-white flex items-center justify-center cursor-pointer hover:bg-gray-800 transition">
+                      {avatarUploading ? (
+                        <Loader2 className="h-4 w-4 animate-spin" />
+                      ) : (
+                        <Camera className="h-4 w-4" />
+                      )}
+                      <input
+                        type="file"
+                        accept="image/jpeg,image/jpg,image/png,image/gif,image/webp"
+                        onChange={uploadProfilePhoto}
+                        disabled={avatarUploading}
+                        className="hidden"
+                      />
+                    </label>
+                  </div>
+
+                  <div className="min-w-0">
+                    <p className="text-lg font-semibold text-gray-900">{adminName}</p>
+                    <p className="text-sm text-gray-500">{adminProfile.email}</p>
+                    <p className="mt-2 inline-flex px-2 py-1 rounded-full bg-yellow-100 text-yellow-700 text-xs font-medium">
+                      {getRoleDisplayName(adminProfile.role)}
+                    </p>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">Username</label>
+                    <input
+                      type="text"
+                      value={adminProfile.username}
+                      onChange={(e) => setAdminProfile({ ...adminProfile, username: e.target.value })}
+                      className="w-full px-4 py-2 border border-gray-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-black"
+                      placeholder="Username"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">Email Address</label>
+                    <input
+                      type="email"
+                      value={adminProfile.email}
+                      disabled
+                      className="w-full px-4 py-2 border border-gray-200 rounded-xl bg-gray-50 text-gray-500 cursor-not-allowed"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">First Name</label>
+                    <input
+                      type="text"
+                      value={adminProfile.first_name}
+                      onChange={(e) => setAdminProfile({ ...adminProfile, first_name: e.target.value })}
+                      className="w-full px-4 py-2 border border-gray-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-black"
+                      placeholder="First name"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">Last Name</label>
+                    <input
+                      type="text"
+                      value={adminProfile.last_name}
+                      onChange={(e) => setAdminProfile({ ...adminProfile, last_name: e.target.value })}
+                      className="w-full px-4 py-2 border border-gray-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-black"
+                      placeholder="Last name"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">Middle Name</label>
+                    <input
+                      type="text"
+                      value={adminProfile.middle_name}
+                      onChange={(e) => setAdminProfile({ ...adminProfile, middle_name: e.target.value })}
+                      className="w-full px-4 py-2 border border-gray-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-black"
+                      placeholder="Middle name"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">Phone Number</label>
+                    <input
+                      type="tel"
+                      value={adminProfile.phone_number}
+                      onChange={(e) => setAdminProfile({ ...adminProfile, phone_number: e.target.value })}
+                      className="w-full px-4 py-2 border border-gray-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-black"
+                      placeholder="+63 XXX XXX XXXX"
+                    />
+                  </div>
+                </div>
+
+                <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 pt-4 border-t border-gray-200">
+                  <p className="text-sm text-gray-500">
+                    Account created {new Date(adminProfile.created_at).toLocaleDateString('en-PH', {
+                      year: 'numeric',
+                      month: 'long',
+                      day: 'numeric',
+                    })}
+                  </p>
+                  <button
+                    onClick={saveAdminProfile}
+                    disabled={profileSaving}
+                    className="inline-flex items-center justify-center gap-2 px-4 py-2 bg-black text-white rounded-xl hover:bg-gray-800 transition disabled:opacity-50"
+                  >
+                    {profileSaving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
+                    {profileSaving ? 'Saving...' : 'Save Profile'}
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <div className="px-6 py-12 text-center text-gray-500">
+                <AlertCircle className="h-10 w-10 mx-auto mb-3 text-gray-300" />
+                Profile details could not be loaded.
+              </div>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* Security Tab */}
       {activeTab === 'security' && (
