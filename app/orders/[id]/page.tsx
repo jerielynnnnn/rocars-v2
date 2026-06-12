@@ -227,6 +227,7 @@ export default function OrderTrackingPage() {
     setSubmittingRating(true);
     try {
       const { data: { user } } = await supabase.auth.getUser();
+      const { data: { session } } = await supabase.auth.getSession();
       
       const { error } = await supabase.rpc('rate_order', {
         p_order_id: parseInt(orderId),
@@ -236,6 +237,27 @@ export default function OrderTrackingPage() {
       });
 
       if (error) throw error;
+
+      if (!session?.access_token) {
+        throw new Error('Not authenticated');
+      }
+
+      const productReviewResponse = await fetch(`/api/orders/${orderId}/product-reviews`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${session.access_token}`,
+        },
+        body: JSON.stringify({
+          rating,
+          comment: ratingComment,
+        }),
+      });
+      const productReviewResult = await productReviewResponse.json();
+
+      if (!productReviewResponse.ok) {
+        throw new Error(productReviewResult.error || 'Failed to publish product reviews');
+      }
       
       alert('Thank you for your rating!');
       setShowRatingModal(false);

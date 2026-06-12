@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { supabaseAdmin } from '@/lib/supabase'
+import { supabaseAdmin } from '@/lib/supabase-admin'
 
 interface ReviewRating {
   product_id: number
@@ -7,13 +7,6 @@ interface ReviewRating {
 }
 
 export async function POST(request: NextRequest) {
-  if (!supabaseAdmin) {
-    return NextResponse.json(
-      { error: 'Supabase service role key is not configured' },
-      { status: 500 }
-    )
-  }
-
   let body: unknown
 
   try {
