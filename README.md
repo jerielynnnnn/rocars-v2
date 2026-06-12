@@ -1,5 +1,4 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
-
+Access the Platform with this link "https://rocars-v2-production.up.railway.app" 
 ## Getting Started
 
 First, run the development server:
