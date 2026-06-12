@@ -23,6 +23,8 @@ function LoginContent() {
 
   const redirectTo = searchParams.get('redirect') || '/'
   const verified = searchParams.get('verified')
+  const authError = searchParams.get('error')
+  const authErrorDescription = searchParams.get('error_description')
 
   const [form, setForm] = useState({
     identifier: '',
@@ -82,6 +84,17 @@ function LoginContent() {
       setSuccessMessage('Email verified successfully! You can now login.')
     }
   }, [verified])
+
+  useEffect(() => {
+    if (!authError) return
+
+    const message = authErrorDescription
+      ? decodeURIComponent(authErrorDescription.replace(/\+/g, ' '))
+      : 'Google sign-in failed. Please try again.'
+
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setError(message)
+  }, [authError, authErrorDescription])
 
   // =========================
   // VERIFY 2FA CODE
@@ -196,7 +209,7 @@ function LoginContent() {
     const message = error?.message || ''
 
     if (/invalid login credentials/i.test(message)) {
-      return 'Invalid email or password. Please check your credentials and try again.'
+      return 'Invalid email or password. If you created this account with Google, use Continue with Google instead.'
     }
 
     if (/email.*not confirmed|confirm your email/i.test(message)) {
@@ -274,7 +287,6 @@ function LoginContent() {
       await completeLogin(data.user)
 
     } catch (err) {
-      console.error('Login error:', err)
       setError(getErrorMessage(err, 'Login failed'))
       setLoading(false)
     }
@@ -290,7 +302,7 @@ function LoginContent() {
     const { error } = await supabase.auth.signInWithOAuth({
       provider: 'google',
       options: {
-        redirectTo: `${window.location.origin}/auth/callback?redirect=${encodeURIComponent(redirectTo)}`,
+        redirectTo: `${window.location.origin}/auth/callback?redirect=${encodeURIComponent('/')}`,
       },
     })
 
@@ -451,6 +463,7 @@ function LoginContent() {
 
                   {/* Verify 2FA Button */}
                   <button
+                    type="button"
                     onClick={verify2FACode}
                     disabled={loading}
                     className="w-full h-12 rounded-2xl bg-black text-white text-sm font-medium hover:bg-gray-900 transition disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2 mt-4"
@@ -484,6 +497,13 @@ function LoginContent() {
                         onChange={(e) =>
                           setForm({ ...form, password: e.target.value })
                         }
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') {
+                            if (!loading && !googleLoading) {
+                              handleLogin()
+                            }
+                          }
+                        }}
                         className="w-full h-11 px-4 pr-11 rounded-2xl border border-gray-200 bg-white text-sm focus:outline-none focus:ring-2 focus:ring-black/10 focus:border-black"
                       />
 
@@ -520,8 +540,9 @@ function LoginContent() {
 
                   {/* LOGIN BUTTON */}
                   <button
+                    type="button"
                     onClick={handleLogin}
-                    disabled={loading}
+                    disabled={loading || googleLoading}
                     className="w-full h-11 rounded-2xl bg-black text-white text-sm font-medium hover:bg-gray-900 transition disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
                   >
                     {loading && <Loader2 className="w-4 h-4 animate-spin" />}
@@ -540,8 +561,9 @@ function LoginContent() {
 
                   {/* GOOGLE BUTTON */}
                   <button
+                    type="button"
                     onClick={handleGoogleLogin}
-                    disabled={googleLoading}
+                    disabled={loading || googleLoading}
                     className="w-full h-11 rounded-2xl border border-gray-200 bg-white text-sm font-medium hover:bg-gray-50 transition flex items-center justify-center gap-2"
                   >
                     {googleLoading ? (
