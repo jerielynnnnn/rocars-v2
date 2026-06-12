@@ -4,21 +4,117 @@ import { cookies } from 'next/headers'
 import { NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 
+const FALLBACK_PUBLIC_ORIGIN = 'https://rocars-v2-production.up.railway.app'
+
+type OAuthUser = {
+  id: string
+  email?: string | null
+  user_metadata?: {
+    full_name?: string
+    name?: string
+    avatar_url?: string
+    picture?: string
+  }
+  app_metadata?: {
+    provider?: string
+  }
+}
+
+function getPublicOrigin(request: Request) {
+  const requestUrl = new URL(request.url)
+  const configuredOrigin =
+    process.env.NEXT_PUBLIC_SITE_URL ||
+    process.env.NEXT_PUBLIC_APP_URL ||
+    (process.env.RAILWAY_PUBLIC_DOMAIN
+      ? `https://${process.env.RAILWAY_PUBLIC_DOMAIN}`
+      : '') ||
+    (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : '')
+
+  if (configuredOrigin) {
+    return configuredOrigin.replace(/\/$/, '')
+  }
+
+  const forwardedHost = request.headers.get('x-forwarded-host')
+  const forwardedProto = request.headers.get('x-forwarded-proto') || 'https'
+
+  if (forwardedHost && forwardedHost !== '0.0.0.0:8080') {
+    return `${forwardedProto}://${forwardedHost}`
+  }
+
+  if (requestUrl.hostname !== '0.0.0.0') {
+    return requestUrl.origin
+  }
+
+  return FALLBACK_PUBLIC_ORIGIN
+}
+
+function getSafeRedirect(rawRedirect: string | null) {
+  return rawRedirect && rawRedirect.startsWith('/') && !rawRedirect.startsWith('//')
+    ? rawRedirect
+    : '/'
+}
+
+function getProfilePayload(user: OAuthUser) {
+  const fullName = user.user_metadata?.full_name || user.user_metadata?.name || ''
+  const [firstName, ...lastNameParts] = fullName.split(' ').filter(Boolean)
+  const usernameBase =
+    user.email?.split('@')[0]?.toLowerCase().replace(/[^a-z0-9]/g, '') ||
+    'google_user'
+  const now = new Date().toISOString()
+
+  return {
+    id: user.id,
+    email: user.email || null,
+    username: `${usernameBase}_${user.id.slice(0, 8)}`,
+    first_name: firstName || null,
+    last_name: lastNameParts.join(' ') || null,
+    avatar_url: user.user_metadata?.avatar_url || user.user_metadata?.picture || '',
+    provider: user.app_metadata?.provider || 'google',
+    role: 'customer',
+    is_active: true,
+    is_verified: true,
+    last_login: now,
+    created_at: now,
+    updated_at: now,
+  }
+}
+
+async function createProfile(user: OAuthUser) {
+  const profilePayload = getProfilePayload(user)
+  const { error: insertError } = await supabaseAdmin
+    .from('profiles')
+    .insert(profilePayload)
+
+  if (!insertError) {
+    return null
+  }
+
+  console.error('Profile full insert error:', insertError)
+
+  const { error: fallbackInsertError } = await supabaseAdmin
+    .from('profiles')
+    .insert({
+      id: profilePayload.id,
+      email: profilePayload.email,
+      username: profilePayload.username,
+      first_name: profilePayload.first_name,
+      last_name: profilePayload.last_name,
+      created_at: profilePayload.created_at,
+    })
+
+  return fallbackInsertError
+}
+
 export async function GET(request: Request) {
   const requestUrl = new URL(request.url)
+  const siteOrigin = getPublicOrigin(request)
 
   const code = requestUrl.searchParams.get('code')
-  const rawRedirect = requestUrl.searchParams.get('redirect')
-
-  // Safe redirect (prevents open redirect attacks)
-  const redirect =
-    rawRedirect && rawRedirect.startsWith('/') && !rawRedirect.startsWith('//')
-      ? rawRedirect
-      : '/'
+  const redirect = getSafeRedirect(requestUrl.searchParams.get('redirect'))
 
   if (!code) {
     return NextResponse.redirect(
-      new URL('/login?error=missing_code', requestUrl.origin)
+      new URL('/login?error=missing_code', siteOrigin)
     )
   }
 
@@ -52,7 +148,7 @@ export async function GET(request: Request) {
     console.error('Auth exchange error:', exchangeError)
 
     return NextResponse.redirect(
-      new URL('/login?error=auth_failed', requestUrl.origin)
+      new URL('/login?error=auth_failed', siteOrigin)
     )
   }
 
@@ -65,7 +161,7 @@ export async function GET(request: Request) {
 
   if (!user) {
     return NextResponse.redirect(
-      new URL('/login?error=no_user', requestUrl.origin)
+      new URL('/login?error=no_user', siteOrigin)
     )
   }
 
@@ -88,44 +184,15 @@ export async function GET(request: Request) {
   // 4. Create profile if missing
   // =========================
   if (!existingProfile) {
-    const fullName =
-      user.user_metadata?.full_name || ''
-
-    const firstName = fullName.split(' ')[0] || ''
-    const lastName =
-      fullName.split(' ').slice(1).join(' ') || ''
-
-    const username =
-      user.email
-        ?.split('@')[0]
-        ?.toLowerCase()
-        .replace(/[^a-z0-9]/g, '') +
-      '_' +
-      user.id.slice(0, 4)
-
-    const { error: insertError } = await supabaseAdmin
-      .from('profiles')
-      .insert({
-        id: user.id,
-        email: user.email,
-        username,
-        first_name: firstName,
-        last_name: lastName,
-        avatar_url: user.user_metadata?.avatar_url || '',
-        provider: user.app_metadata?.provider || 'email',
-        role: 'customer',
-        is_active: true,
-        is_verified: true,
-        created_at: new Date().toISOString(),
-        updated_at: new Date().toISOString(),
-      })
+    const insertError = await createProfile(user)
 
     if (insertError) {
-      console.error('Profile insert error:', insertError)
+      console.error('Profile fallback insert error:', insertError)
+      const errorUrl = new URL('/login', siteOrigin)
+      errorUrl.searchParams.set('error', 'profile_create_failed')
+      errorUrl.searchParams.set('error_description', insertError.message)
 
-      return NextResponse.redirect(
-        new URL('/login?error=profile_create_failed', requestUrl.origin)
-      )
+      return NextResponse.redirect(errorUrl)
     }
 
     console.log('Profile created for:', user.email)
@@ -154,6 +221,6 @@ export async function GET(request: Request) {
   // 6. Redirect user
   // =========================
   return NextResponse.redirect(
-    new URL(redirect, requestUrl.origin)
+    new URL(redirect, siteOrigin)
   )
 }
