@@ -182,40 +182,6 @@ function LoginContent() {
     }
   }
 
-  // =========================
-  // RESOLVE IDENTIFIER TO EMAIL
-  // =========================
-  const resolveIdentifierToEmail = async (identifier: string): Promise<string | null> => {
-    const trimmedIdentifier = identifier.trim().toLowerCase()
-    
-    // If it's already an email, return as is
-    if (trimmedIdentifier.includes('@')) {
-      return trimmedIdentifier
-    }
-    
-    // Check if it's a phone number
-    const isPhone = /^[0-9+]{10,15}$/.test(trimmedIdentifier)
-    
-    if (isPhone) {
-      const { data } = await supabase
-        .from('profiles')
-        .select('email')
-        .eq('phone_number', trimmedIdentifier)
-        .maybeSingle()
-      
-      return data?.email || null
-    }
-    
-    // Check if it's a username
-    const { data } = await supabase
-      .from('profiles')
-      .select('email')
-      .eq('username', trimmedIdentifier)
-      .maybeSingle()
-    
-    return data?.email || null
-  }
-
   const getProfileProvider = async (email: string): Promise<string | null> => {
     const { data } = await supabase
       .from('profiles')
@@ -257,11 +223,10 @@ function LoginContent() {
         throw new Error('Please fill in all fields')
       }
 
-      // Resolve identifier to email
-      const emailToUse = await resolveIdentifierToEmail(form.identifier)
+      const emailToUse = form.identifier.trim().toLowerCase()
       
-      if (!emailToUse) {
-        throw new Error('Username/Phone number not found')
+      if (!emailToUse.includes('@')) {
+        throw new Error('Please enter a valid email address')
       }
 
       const { data, error } = await supabase.auth.signInWithPassword({
@@ -343,15 +308,15 @@ function LoginContent() {
     setSuccessMessage('')
 
     if (!form.identifier) {
-      setError('Enter your email, username, or phone number first')
+      setError('Enter your email')
       return
     }
 
     try {
-      const emailToUse = await resolveIdentifierToEmail(form.identifier)
+      const emailToUse = form.identifier.trim().toLowerCase()
       
-      if (!emailToUse) {
-        throw new Error('Email/Username/Phone number not found')
+      if (!emailToUse.includes('@')) {
+        throw new Error('Please enter a valid email address')
       }
 
       const { error } = await supabase.auth.resetPasswordForEmail(
@@ -499,8 +464,8 @@ function LoginContent() {
                   {/* IDENTIFIER */}
                   <div>
                     <input
-                      type="text"
-                      placeholder="Email / Username / Phone number"
+                      type="email"
+                      placeholder="Email address"
                       value={form.identifier}
                       onChange={(e) =>
                         setForm({ ...form, identifier: e.target.value })
