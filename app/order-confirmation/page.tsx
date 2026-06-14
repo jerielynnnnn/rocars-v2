@@ -133,7 +133,8 @@ function OrderConfirmationContent() {
       return
     }
 
-    fetchOrder(orderId)
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    void fetchOrder(orderId)
   }, [fetchOrder, orderId, router])
 
   const formatPrice = (price: number) => {
@@ -268,6 +269,75 @@ function OrderConfirmationContent() {
     }
   }
 
+  const getOrderStatusBanner = (status: string, paymentStatus: string) => {
+    switch (status) {
+      case 'pending_payment':
+        return {
+          title: 'Payment Pending',
+          description: 'Your order was created and is waiting for payment confirmation before processing.',
+          icon: <Clock className="h-12 w-12 text-yellow-600" />,
+          iconClass: 'bg-yellow-100',
+          badgeClass: 'bg-yellow-100 text-yellow-700',
+        }
+      case 'pending':
+        return {
+          title: paymentStatus === 'paid' ? 'Order Paid' : 'Order Received',
+          description: 'Your order is waiting for review and will move to processing once confirmed.',
+          icon: <Clock className="h-12 w-12 text-orange-600" />,
+          iconClass: 'bg-orange-100',
+          badgeClass: 'bg-orange-100 text-orange-700',
+        }
+      case 'confirmed':
+        return {
+          title: 'Order Confirmed',
+          description: 'Your order has been confirmed and will be prepared for processing and shipment.',
+          icon: <CheckCircle2 className="h-12 w-12 text-green-600" />,
+          iconClass: 'bg-green-100',
+          badgeClass: 'bg-green-100 text-green-700',
+        }
+      case 'processing':
+        return {
+          title: 'Order Processing',
+          description: 'Your order is being prepared by the ROCARS team.',
+          icon: <Package className="h-12 w-12 text-blue-600" />,
+          iconClass: 'bg-blue-100',
+          badgeClass: 'bg-blue-100 text-blue-700',
+        }
+      case 'shipped':
+        return {
+          title: 'Order Shipped',
+          description: 'Your order is on the way. Use the tracking details below for delivery updates.',
+          icon: <Truck className="h-12 w-12 text-indigo-600" />,
+          iconClass: 'bg-indigo-100',
+          badgeClass: 'bg-indigo-100 text-indigo-700',
+        }
+      case 'delivered':
+        return {
+          title: 'Order Delivered',
+          description: 'Your order has been delivered. You can review the items or report a problem if needed.',
+          icon: <CheckCircle2 className="h-12 w-12 text-green-600" />,
+          iconClass: 'bg-green-100',
+          badgeClass: 'bg-green-100 text-green-700',
+        }
+      case 'cancelled':
+        return {
+          title: 'Order Cancelled',
+          description: 'This order was cancelled and will no longer be processed for delivery.',
+          icon: <X className="h-12 w-12 text-red-600" />,
+          iconClass: 'bg-red-100',
+          badgeClass: 'bg-red-100 text-red-700',
+        }
+      default:
+        return {
+          title: status.replace('_', ' ').replace(/\b\w/g, (letter) => letter.toUpperCase()),
+          description: 'This page reflects the latest status recorded for your order.',
+          icon: <Package className="h-12 w-12 text-gray-600" />,
+          iconClass: 'bg-gray-100',
+          badgeClass: 'bg-gray-100 text-gray-700',
+        }
+    }
+  }
+
   if (loading) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-[#f8f8f8]">
@@ -285,6 +355,7 @@ function OrderConfirmationContent() {
   }
 
   const paymentInfo = getPaymentMethodDisplay(order.payment_method)
+  const statusBanner = getOrderStatusBanner(order.order_status, order.payment_status)
 
   return (
     <>
@@ -338,8 +409,8 @@ function OrderConfirmationContent() {
             </button>
           </div>
 
-          {/* DELIVERY STATUS - MOVED ABOVE ORDER CONFIRMED HEADER */}
-          {order.tracking_number && (
+          {/* DELIVERY STATUS */}
+          {order.tracking_number && order.order_status !== 'cancelled' && (
             <div className="no-print bg-white rounded-[32px] border border-gray-200 shadow-sm p-6 mb-6">
               <div className="flex items-center gap-3 mb-4">
                 <div className="p-2 bg-yellow-100 rounded-full">
@@ -411,20 +482,26 @@ function OrderConfirmationContent() {
             </div>
           )}
 
-          {/* SUCCESS HEADER */}
+          {/* STATUS HEADER */}
           <div className="no-print bg-white rounded-[32px] shadow-sm border border-gray-200 p-8 text-center mb-6">
-            <div className="mx-auto mb-5 flex h-24 w-24 items-center justify-center rounded-full bg-yellow-100">
-              <CheckCircle2 className="h-12 w-12 text-yellow-500" />
+            <div className={`mx-auto mb-5 flex h-24 w-24 items-center justify-center rounded-full ${statusBanner.iconClass}`}>
+              {statusBanner.icon}
             </div>
 
             <h1 className="text-4xl font-bold text-gray-900">
-              Order Confirmed
+              {statusBanner.title}
             </h1>
 
             <p className="mt-3 text-gray-500 max-w-2xl mx-auto leading-relaxed">
-              Thank you for shopping with ROCARS. Your order has been placed
-              successfully and is now being prepared for processing and shipment.
+              {statusBanner.description}
             </p>
+
+            <div className="mt-4 flex justify-center">
+              <span className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold capitalize ${statusBanner.badgeClass}`}>
+                {getStatusIcon(order.order_status)}
+                {order.order_status.replace('_', ' ')}
+              </span>
+            </div>
 
             <div className="mt-6 flex justify-center gap-4">
               <Link
@@ -434,7 +511,7 @@ function OrderConfirmationContent() {
                 View My Orders
               </Link>
               <Link
-                href="/shop"
+                href="/products"
                 className="px-6 py-3 rounded-2xl border border-gray-300 hover:bg-gray-50 transition font-semibold text-gray-700"
               >
                 Continue Shopping
