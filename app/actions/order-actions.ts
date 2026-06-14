@@ -1,6 +1,7 @@
 'use server';
 
 import { supabase } from '@/lib/supabase';  // Use supabase directly
+import { nowIso } from '@/lib/time';
 import { revalidatePath } from 'next/cache';
 
 interface ProcessOrderParams {
@@ -128,7 +129,7 @@ export async function cancelOrder(orderId: number, userId: string, reason: strin
     .update({
       order_status: 'cancelled',
       cancellation_reason: reason,
-      cancelled_at: new Date().toISOString()
+      cancelled_at: nowIso()
     })
     .eq('id', orderId);
   

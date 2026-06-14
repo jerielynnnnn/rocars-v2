@@ -3,6 +3,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { supabase } from '@/lib/supabase'
+import { formatDateTimePH } from '@/lib/time'
 import { logAdminActivity } from '@/lib/admin-activity'
 import {
   CreditCard,
@@ -454,13 +455,7 @@ export default function AdminPaymentsPage() {
   }
 
   const formatDate = (date: string) => {
-    return new Date(date).toLocaleString('en-PH', {
-      year: 'numeric',
-      month: 'short',
-      day: 'numeric',
-      hour: '2-digit',
-      minute: '2-digit',
-    })
+    return formatDateTimePH(date)
   }
 
   if (loading) {

@@ -1,9 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@supabase/supabase-js'
 import { supabaseAdmin } from '@/lib/supabase-admin'
+import { nowIso } from '@/lib/time'
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!
 const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
+const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY
 
 const supabase = createClient(supabaseUrl, supabaseAnonKey, {
   auth: {
@@ -40,6 +42,11 @@ async function ensureProfile(user: {
     full_name?: string
     name?: string
     username?: string
+    avatar_url?: string
+    picture?: string
+  }
+  app_metadata?: {
+    provider?: string
   }
 }) {
   const { data: existingProfile, error: profileLookupError } = await supabaseAdmin
@@ -58,24 +65,63 @@ async function ensureProfile(user: {
 
   const fullName = user.user_metadata?.full_name || user.user_metadata?.name || ''
   const [fallbackFirstName, ...fallbackLastNameParts] = fullName.split(' ').filter(Boolean)
+  const usernameBase =
+    user.user_metadata?.username ||
+    user.email?.split('@')[0]?.toLowerCase().replace(/[^a-z0-9]/g, '') ||
+    'user'
+  const createdAt = nowIso()
+  const profilePayload = {
+    id: user.id,
+    email: user.email || null,
+    username: `${usernameBase}_${user.id.slice(0, 8)}`,
+    first_name: user.user_metadata?.first_name || fallbackFirstName || null,
+    last_name: user.user_metadata?.last_name || fallbackLastNameParts.join(' ') || null,
+    avatar_url: user.user_metadata?.avatar_url || user.user_metadata?.picture || '',
+    provider: user.app_metadata?.provider || 'email',
+    role: 'customer',
+    is_active: true,
+    is_verified: true,
+    created_at: createdAt,
+    updated_at: createdAt,
+  }
 
   const { error: insertProfileError } = await supabaseAdmin
     .from('profiles')
+    .insert(profilePayload)
+
+  if (!insertProfileError) {
+    return
+  }
+
+  console.error('Voucher claim full profile insert failed:', insertProfileError)
+
+  const { error: fallbackInsertProfileError } = await supabaseAdmin
+    .from('profiles')
     .insert({
-      id: user.id,
-      email: user.email || null,
-      username: user.user_metadata?.username || user.email?.split('@')[0] || `user_${user.id.slice(0, 8)}`,
-      first_name: user.user_metadata?.first_name || fallbackFirstName || null,
-      last_name: user.user_metadata?.last_name || fallbackLastNameParts.join(' ') || null,
-      created_at: new Date().toISOString(),
+      id: profilePayload.id,
+      email: profilePayload.email,
+      username: profilePayload.username,
+      first_name: profilePayload.first_name,
+      last_name: profilePayload.last_name,
+      created_at: profilePayload.created_at,
     })
 
-  if (insertProfileError) {
-    throw insertProfileError
+  if (fallbackInsertProfileError) {
+    throw fallbackInsertProfileError
   }
 }
 
 export async function POST(request: NextRequest) {
+  if (!supabaseServiceKey || supabaseServiceKey === supabaseAnonKey) {
+    return NextResponse.json(
+      {
+        error:
+          'Voucher claim is not configured correctly. Set SUPABASE_SERVICE_ROLE_KEY in the server environment.',
+      },
+      { status: 500 }
+    )
+  }
+
   const auth = await getUserFromRequest(request)
 
   if ('error' in auth) {
@@ -127,6 +173,16 @@ export async function POST(request: NextRequest) {
       .maybeSingle()
 
     if (existingClaimError) {
+      if (/permission denied.*voucher_usage/i.test(existingClaimError.message)) {
+        return NextResponse.json(
+          {
+            error:
+              'Voucher permissions are not configured. Run supabase/sql/fix-voucher-usage-permissions.sql in Supabase.',
+          },
+          { status: 500 }
+        )
+      }
+
       return NextResponse.json({ error: existingClaimError.message }, { status: 500 })
     }
 
@@ -134,17 +190,38 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'You have already claimed this voucher' }, { status: 409 })
     }
 
-    const { error: insertError } = await supabaseAdmin
+    const claimPayload = {
+      user_id: auth.user.id,
+      voucher_id: voucher.id,
+      voucher_code: voucher.code,
+      discount_amount: 0,
+      free_shipping: voucher.type === 'free_shipping',
+      created_at: nowIso(),
+    }
+
+    let { error: insertError } = await supabaseAdmin
       .from('voucher_usage')
-      .insert({
-        user_id: auth.user.id,
-        voucher_id: voucher.id,
-        voucher_code: voucher.code,
-        discount_amount: 0,
-        free_shipping: voucher.type === 'free_shipping',
-      })
+      .insert(claimPayload)
+
+    if (insertError && /foreign key|voucher_usage_user_id_fkey/i.test(insertError.message)) {
+      await ensureProfile(auth.user)
+      const retryResult = await supabaseAdmin
+        .from('voucher_usage')
+        .insert(claimPayload)
+      insertError = retryResult.error
+    }
 
     if (insertError) {
+      if (/permission denied.*voucher_usage/i.test(insertError.message)) {
+        return NextResponse.json(
+          {
+            error:
+              'Voucher permissions are not configured. Run supabase/sql/fix-voucher-usage-permissions.sql in Supabase.',
+          },
+          { status: 500 }
+        )
+      }
+
       return NextResponse.json({ error: insertError.message }, { status: 500 })
     }
 
@@ -163,7 +240,7 @@ export async function POST(request: NextRequest) {
       message: `You have successfully claimed voucher ${voucher.code}. Use it at checkout!`,
       type: 'general',
       is_read: false,
-      created_at: new Date().toISOString(),
+      created_at: nowIso(),
     })
 
     return NextResponse.json({ success: true, voucher })

@@ -6,6 +6,7 @@ import { useRouter, useSearchParams } from 'next/navigation'
 import Link from 'next/link'
 import { supabase } from '@/lib/supabase'
 import { useCart } from '@/context/CartContext'
+import { formatDatePH, nowIso } from '@/lib/time'
 import {
   ArrowLeft,
   MapPin,
@@ -539,7 +540,7 @@ function CheckoutContent() {
         transaction_id: `COD-${order.id}-${Date.now()}`,
         amount: total,
         payment_status: 'pending',
-        created_at: new Date().toISOString()
+        created_at: nowIso()
       })
     }
 
@@ -551,7 +552,7 @@ function CheckoutContent() {
         transaction_id: `GCASH-${order.id}-${Date.now()}`,
         amount: total,
         payment_status: 'pending',
-        created_at: new Date().toISOString()
+        created_at: nowIso()
       })
     }
 
@@ -596,7 +597,7 @@ function CheckoutContent() {
       order_id: order.id,
       status: order.order_status,
       notes: paymentMethod === 'cod' ? 'Order placed with COD' : 'Order placed - awaiting payment',
-      created_at: new Date().toISOString(),
+      created_at: nowIso(),
     })
 
     if (typeof window !== 'undefined') {
@@ -1061,7 +1062,7 @@ function CheckoutContent() {
                                 {voucher.max_discount && voucher.type === 'percentage' && (
                                   <span>Max {formatPrice(voucher.max_discount)}</span>
                                 )}
-                                <span>Expires: {new Date(voucher.valid_until).toLocaleDateString()}</span>
+                                <span>Expires: {formatDatePH(voucher.valid_until)}</span>
                               </div>
                               
                               {!meetsMinSpend && (

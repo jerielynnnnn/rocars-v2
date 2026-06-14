@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import { supabase } from '@/lib/supabase';
 import Link from 'next/link';
+import { formatDatePH, formatTimePH } from '@/lib/time';
 import { 
   Package, Truck, CheckCircle, Clock, MapPin, 
   Calendar, ArrowLeft, RefreshCw, Star, AlertCircle,
@@ -301,10 +302,10 @@ export default function OrderTrackingPage() {
     if (!order) return '';
     const historyItem = order.order_status_history?.find(h => h.status === statusKey);
     if (historyItem) {
-      return new Date(historyItem.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+      return formatTimePH(historyItem.created_at);
     }
     if (statusKey === 'order_placed') {
-      return new Date(order.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+      return formatTimePH(order.created_at);
     }
     return '';
   };
@@ -318,11 +319,7 @@ export default function OrderTrackingPage() {
 
   const formatDate = (dateString: string) => {
     if (!dateString) return 'N/A';
-    return new Date(dateString).toLocaleDateString('en-US', {
-      year: 'numeric',
-      month: 'long',
-      day: 'numeric'
-    });
+    return formatDatePH(dateString);
   };
 
   const canRequestRefund = () => {
@@ -418,12 +415,12 @@ export default function OrderTrackingPage() {
               </span>
               {order.estimated_delivery_date && order.order_status !== 'delivered' && (
                 <p className="text-xs text-gray-500 mt-2">
-                  Est. Delivery: {new Date(order.estimated_delivery_date).toLocaleDateString()}
+                  Est. Delivery: {formatDatePH(order.estimated_delivery_date)}
                 </p>
               )}
               {order.delivered_at && (
                 <p className="text-xs text-green-600 mt-2">
-                  Delivered: {new Date(order.delivered_at).toLocaleDateString()}
+                  Delivered: {formatDatePH(order.delivered_at)}
                 </p>
               )}
             </div>

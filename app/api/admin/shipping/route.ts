@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@supabase/supabase-js'
 import { isAdminLikeRole } from '@/lib/admin-role'
 import { supabaseAdmin } from '@/lib/supabase-admin'
+import { nowIso } from '@/lib/time'
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!
 const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
@@ -141,7 +142,7 @@ export async function POST(request: NextRequest) {
       tracking_number: trackingNumber,
       carrier,
       order_status: 'shipped',
-      updated_at: new Date().toISOString(),
+      updated_at: nowIso(),
       estimated_delivery_date: estimatedDeliveryDate,
     })
     .eq('id', orderId)
@@ -158,7 +159,7 @@ export async function POST(request: NextRequest) {
       order_id: orderId,
       status: 'shipped',
       notes: `Shipped via ${courierLabel || carrier}. Tracking: ${trackingNumber}`,
-      created_at: new Date().toISOString(),
+      created_at: nowIso(),
     })
 
   if (updatedOrder?.user_id) {
@@ -169,7 +170,7 @@ export async function POST(request: NextRequest) {
         title: 'Your Order Has Shipped!',
         message: `Order #${orderId} has been shipped via ${courierLabel || carrier}. Tracking: ${trackingNumber}`,
         is_read: false,
-        created_at: new Date().toISOString(),
+        created_at: nowIso(),
       })
   }
 

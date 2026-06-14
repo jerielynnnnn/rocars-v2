@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import { supabase } from '@/lib/supabase';
+import { formatDateTimePH } from '@/lib/time';
 import {
   RefreshCw,
   Search,
@@ -155,13 +156,7 @@ export default function RefundsPage() {
   };
 
   const formatDate = (dateString: string) => {
-    return new Date(dateString).toLocaleString('en-US', {
-      year: 'numeric',
-      month: 'short',
-      day: 'numeric',
-      hour: '2-digit',
-      minute: '2-digit'
-    });
+    return formatDateTimePH(dateString);
   };
 
   const formatPrice = (price: number) => {

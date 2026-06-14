@@ -4,6 +4,7 @@ import { Suspense, useEffect, useState } from 'react'
 import { useSearchParams, useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { supabase } from '@/lib/supabase'
+import { nowIso } from '@/lib/time'
 import PageContainer from '@/components/layout/PageContainer'
 import PageSection from '@/components/layout/PageSection'
 import {
@@ -93,7 +94,7 @@ function OrderSuccessContent() {
             transaction_id: paymentIntentId || sessionId || `PAY-${Date.now()}`,
             amount: Number(orderData?.total_amount) || 0,
             payment_status: 'paid',
-            paid_at: new Date().toISOString(),
+            paid_at: nowIso(),
           })
 
         if (paymentError) {

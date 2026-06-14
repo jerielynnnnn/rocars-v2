@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@supabase/supabase-js'
 import { isAdminLikeRole } from '@/lib/admin-role'
 import { supabaseAdmin } from '@/lib/supabase-admin'
+import { nowIso } from '@/lib/time'
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!
 const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
@@ -254,7 +255,7 @@ export async function POST(request: NextRequest) {
   }
 
   if (newStatus === 'paid') {
-    updateData.paid_at = new Date().toISOString()
+    updateData.paid_at = nowIso()
   }
 
   const effectiveOrderId = orderId || paymentId
@@ -276,12 +277,12 @@ export async function POST(request: NextRequest) {
         ? {
             payment_status: 'paid',
             order_status: 'processing',
-            updated_at: new Date().toISOString(),
+            updated_at: nowIso(),
           }
         : {
             payment_status: newStatus,
             order_status: newStatus === 'failed' ? 'pending_payment' : undefined,
-            updated_at: new Date().toISOString(),
+            updated_at: nowIso(),
           }
 
     Object.keys(orderUpdate).forEach((key) => {
@@ -335,7 +336,7 @@ export async function POST(request: NextRequest) {
             : `Your payment for order #${effectiveOrderId} has failed. Please try again or contact support.`,
           is_read: false,
           type: 'general',
-          created_at: new Date().toISOString(),
+          created_at: nowIso(),
         })
     }
   }

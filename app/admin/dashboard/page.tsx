@@ -4,6 +4,7 @@
 import { useEffect, useState } from 'react'
 import Link from 'next/link'
 import { supabase } from '@/lib/supabase'
+import { formatDateTimePH, formatTimePH } from '@/lib/time'
 import {
   Users,
   Package,
@@ -610,8 +611,7 @@ export default function DashboardPage() {
   }
 
   const formatDate = (dateString: string) => {
-    const date = new Date(dateString)
-    return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })
+    return formatDateTimePH(dateString)
   }
 
   if (loading) {
@@ -684,7 +684,7 @@ export default function DashboardPage() {
         
         <div className="flex items-center gap-3">
           <div className="text-xs text-gray-400">
-            Last updated: {lastUpdated.toLocaleTimeString()}
+            Last updated: {formatTimePH(lastUpdated)}
           </div>
           <button
             onClick={fetchAllData}

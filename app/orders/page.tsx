@@ -5,6 +5,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { supabase } from '@/lib/supabase'
+import { formatDateTimePH, nowIso } from '@/lib/time'
 import PageContainer from '@/components/layout/PageContainer'
 import PageSection from '@/components/layout/PageSection'
 import {
@@ -292,7 +293,7 @@ export default function OrdersPage() {
           user_id: session.user.id,
           reason: finalReason,
           status: 'pending',
-          created_at: new Date().toISOString()
+          created_at: nowIso()
         })
 
       if (insertError) throw insertError
@@ -602,13 +603,7 @@ export default function OrdersPage() {
   }
 
   const formatDateTime = (date: string) => {
-    return new Date(date).toLocaleDateString('en-PH', {
-      year: 'numeric',
-      month: 'short',
-      day: 'numeric',
-      hour: '2-digit',
-      minute: '2-digit',
-    })
+    return formatDateTimePH(date)
   }
 
   const getStatusIcon = (status: string) => {

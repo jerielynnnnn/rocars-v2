@@ -1,5 +1,6 @@
 
 import { supabase } from '@/lib/supabase'
+import { nowIso } from '@/lib/time'
 
 export async function createOrder({
   userId,
@@ -124,7 +125,7 @@ export async function updateOrderStatus({
   }
 
   if (status === 'delivered') {
-    updateData.delivered_at = new Date().toISOString()
+    updateData.delivered_at = nowIso()
   }
 
   const { data: order, error } = await supabase

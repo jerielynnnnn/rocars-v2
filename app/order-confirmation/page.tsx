@@ -1,11 +1,12 @@
 // app/order-confirmation/page.tsx
 'use client'
 
-import { Suspense, useEffect, useState } from 'react'
+import { Suspense, useCallback, useEffect, useState } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
 import Link from 'next/link'
 import { supabase } from '@/lib/supabase'
 import { useCart } from '@/context/CartContext'
+import { formatDatePH, formatLongDateTimePH, formatShortDatePH } from '@/lib/time'
 import PageContainer from '@/components/layout/PageContainer'
 import PageSection from '@/components/layout/PageSection'
 import {
@@ -79,16 +80,7 @@ function OrderConfirmationContent() {
   const [cartCleared, setCartCleared] = useState(false)
   const [showReceiptModal, setShowReceiptModal] = useState(false)
 
-  useEffect(() => {
-    if (!orderId) {
-      router.push('/')
-      return
-    }
-
-    fetchOrder(orderId)
-  }, [orderId, router])
-
-  const fetchOrder = async (id: string) => {
+  const fetchOrder = useCallback(async (id: string) => {
     try {
       const { data, error } = await supabase
         .from('orders')
@@ -133,7 +125,16 @@ function OrderConfirmationContent() {
     } finally {
       setLoading(false)
     }
-  }
+  }, [cartCleared, clearCart, router])
+
+  useEffect(() => {
+    if (!orderId) {
+      router.push('/')
+      return
+    }
+
+    fetchOrder(orderId)
+  }, [fetchOrder, orderId, router])
 
   const formatPrice = (price: number) => {
     return new Intl.NumberFormat('en-PH', {
@@ -145,21 +146,11 @@ function OrderConfirmationContent() {
   }
 
   const formatDate = (date: string) => {
-    return new Date(date).toLocaleDateString('en-US', {
-      year: 'numeric',
-      month: 'long',
-      day: 'numeric',
-      hour: '2-digit',
-      minute: '2-digit',
-    })
+    return formatLongDateTimePH(date)
   }
 
   const formatShortDate = (date: string) => {
-    return new Date(date).toLocaleDateString('en-US', {
-      year: 'numeric',
-      month: 'short',
-      day: 'numeric',
-    })
+    return formatShortDatePH(date)
   }
 
   const handlePrint = () => {
@@ -411,11 +402,7 @@ function OrderConfirmationContent() {
                       <p className="text-xs text-gray-500 mb-1">Estimated Delivery Date</p>
                       <p className="font-semibold text-gray-900 flex items-center gap-2">
                         <Calendar className="h-4 w-4 text-gray-400" />
-                        {new Date(order.estimated_delivery_date).toLocaleDateString('en-PH', {
-                          year: 'numeric',
-                          month: 'long',
-                          day: 'numeric',
-                        })}
+                        {formatDatePH(order.estimated_delivery_date)}
                       </p>
                     </div>
                   )}
@@ -752,11 +739,7 @@ function OrderConfirmationContent() {
                             <div>
                               <p className="text-gray-500 text-xs">Estimated Delivery</p>
                               <p className="text-sm font-medium">
-                                {new Date(order.estimated_delivery_date).toLocaleDateString('en-PH', {
-                                  year: 'numeric',
-                                  month: 'long',
-                                  day: 'numeric',
-                                })}
+                                {formatDatePH(order.estimated_delivery_date)}
                               </p>
                             </div>
                           )}
