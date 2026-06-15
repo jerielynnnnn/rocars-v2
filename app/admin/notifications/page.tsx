@@ -1,42 +1,49 @@
 'use client'
 
-import { useState, useEffect } from 'react'
-import { supabase } from '@/lib/supabase'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import Link from 'next/link'
+import { supabase } from '@/lib/supabase'
 import {
-  Bell, 
-  Package, 
-  AlertTriangle, 
-  RefreshCw, 
-  CheckCircle, 
-  DollarSign,
-  ShoppingBag,
-  Users,
-  TrendingUp,
-  Clock,
-  ChevronRight,
-  Filter,
-  Trash2,
+  AlertTriangle,
+  Bell,
+  CheckCircle,
+  CreditCard,
   Eye,
-  EyeOff,
+  Filter,
+  RefreshCw,
   Search,
-  CreditCard
+  ShoppingBag,
+  Star,
+  Trash2,
 } from 'lucide-react'
 
-interface Notification {
-  id: number
+interface AdminNotification {
+  id: string
+  type: 'low_stock' | 'new_order' | 'pending_refund' | 'pending_review'
   title: string
   message: string
   is_read: boolean
   created_at: string
-  type?: 'order' | 'stock' | 'refund' | 'payment' | 'user' | 'system'
-  action_url?: string
-  action_label?: string
+  link: string
+  metadata?: Record<string, unknown>
 }
 
-type FilterType = 'all' | 'order' | 'stock' | 'refund' | 'unread'
+interface LowStockProduct {
+  id: number
+  name: string
+  stock: number
+}
 
-// Event to notify navbar about notification changes
+interface PendingOrder {
+  id: number
+  total_amount: number
+  created_at: string
+}
+
+type FilterType = 'all' | 'unread' | AdminNotification['type']
+
+const ADMIN_DISMISSED_NOTIFS_KEY = 'rocars_dismissed_admin_notifications'
+
 const notifyNavbar = () => {
   if (typeof window !== 'undefined') {
     window.dispatchEvent(new Event('admin-notifications-updated'))
@@ -44,440 +51,358 @@ const notifyNavbar = () => {
 }
 
 export default function AdminNotificationsPage() {
-  const [notifications, setNotifications] = useState<Notification[]>([])
-  const [filteredNotifications, setFilteredNotifications] = useState<Notification[]>([])
+  const [notifications, setNotifications] = useState<AdminNotification[]>([])
   const [loading, setLoading] = useState(true)
-  const [lowStockCount, setLowStockCount] = useState(0)
   const [selectedFilter, setSelectedFilter] = useState<FilterType>('all')
   const [searchQuery, setSearchQuery] = useState('')
   const [showFilters, setShowFilters] = useState(false)
-  const [stats, setStats] = useState({
-    totalOrders: 0,
-    totalRevenue: 0,
-    totalUsers: 0
-  })
 
-  useEffect(() => {
-    fetchAllData()
-    fetchDashboardStats()
-  }, [])
+  const getDismissedIds = () => {
+    if (typeof window === 'undefined') return new Set<string>()
 
-  useEffect(() => {
-    filterNotifications()
-  }, [notifications, selectedFilter, searchQuery])
-
-  const fetchDashboardStats = async () => {
     try {
-      const today = new Date()
-      today.setHours(0, 0, 0, 0)
-      
-      const { count: ordersToday } = await supabase
-        .from('orders')
-        .select('*', { count: 'exact', head: true })
-        .gte('created_at', today.toISOString())
-
-      const thirtyDaysAgo = new Date()
-      thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30)
-      
-      const { data: revenueData } = await supabase
-        .from('orders')
-        .select('total_amount')
-        .eq('payment_status', 'paid')
-        .gte('created_at', thirtyDaysAgo.toISOString())
-
-      const totalRevenue = revenueData?.reduce((sum, order) => sum + (order.total_amount || 0), 0) || 0
-
-      const { count: totalUsers } = await supabase
-        .from('profiles')
-        .select('*', { count: 'exact', head: true })
-
-      setStats({
-        totalOrders: ordersToday || 0,
-        totalRevenue: totalRevenue,
-        totalUsers: totalUsers || 0
-      })
-    } catch (error) {
-      console.error('Error fetching stats:', error)
+      return new Set(JSON.parse(localStorage.getItem(ADMIN_DISMISSED_NOTIFS_KEY) || '[]') as string[])
+    } catch {
+      return new Set<string>()
     }
   }
 
-  const fetchAllData = async () => {
+  const dismissIds = (ids: string[]) => {
+    const dismissedIds = getDismissedIds()
+    ids.forEach(id => dismissedIds.add(id))
+    localStorage.setItem(ADMIN_DISMISSED_NOTIFS_KEY, JSON.stringify([...dismissedIds]))
+  }
+
+  const isTemporaryNotification = (id: string) => id.startsWith('lowstock-') || id.startsWith('order-')
+
+  const fetchAllData = useCallback(async () => {
     setLoading(true)
-    
+
     try {
-      // Fetch low stock count
-      const { count: lowStock } = await supabase
-        .from('products')
-        .select('*', { count: 'exact', head: true })
-        .lt('stock', 10)
-        .eq('is_active', true)
-      
-      setLowStockCount(lowStock || 0)
-      
-      // Fetch pending orders with user info
-      const oneDayAgo = new Date()
-      oneDayAgo.setDate(oneDayAgo.getDate() - 1)
-      
-      const { data: orders } = await supabase
-        .from('orders')
-        .select(`
-          id,
-          total_amount,
-          created_at,
-          user_id,
-          order_status,
-          payment_method
-        `)
-        .in('order_status', ['pending_payment', 'pending'])
-        .gte('created_at', oneDayAgo.toISOString())
-        .order('created_at', { ascending: false })
-        .limit(20)
-      
-      // Fetch user profiles for orders
-      const ordersWithUserNames = []
-      if (orders) {
-        for (const order of orders) {
-          const { data: profile } = await supabase
-            .from('profiles')
-            .select('first_name, last_name, username')
-            .eq('id', order.user_id)
-            .single()
-          
-          const userName = profile?.first_name 
-            ? `${profile.first_name} ${profile.last_name || ''}`
-            : profile?.username || 'Customer'
-          
-          ordersWithUserNames.push({
-            ...order,
-            user_name: userName
-          })
+      const dismissedIds = getDismissedIds()
+      const { data: { session } } = await supabase.auth.getSession()
+      const combined: AdminNotification[] = []
+
+      if (session?.access_token) {
+        const response = await fetch('/api/admin/notifications', {
+          headers: {
+            Authorization: `Bearer ${session.access_token}`,
+          },
+        })
+        const result = await response.json()
+
+        if (response.ok && Array.isArray(result.notifications)) {
+          combined.push(...(result.notifications as AdminNotification[]))
+        } else if (!response.ok) {
+          console.error('Error fetching admin notifications:', result.error)
         }
       }
-      
-      // Fetch unread admin notifications
-      const { data: dbNotifs } = await supabase
-        .from('notifications')
-        .select('*')
-        .is('user_id', null)
-        .eq('is_read', false)
+
+      const { data: lowStockProducts } = await supabase
+        .from('products')
+        .select('id, name, stock')
+        .lt('stock', 10)
+        .eq('is_active', true)
+
+      ;((lowStockProducts || []) as LowStockProduct[]).forEach(product => {
+        const id = `lowstock-${product.id}`
+        const exists = combined.some(notification =>
+          notification.id === id || notification.metadata?.product_id === product.id
+        )
+
+        if (!exists && !dismissedIds.has(id)) {
+          combined.push({
+            id,
+            type: 'low_stock',
+            title: 'Low Stock Alert',
+            message: `${product.name} has only ${product.stock} items left in stock`,
+            created_at: new Date().toISOString(),
+            is_read: false,
+            link: `/admin/products?edit=${product.id}`,
+            metadata: { product_id: product.id, stock: product.stock },
+          })
+        }
+      })
+
+      const { data: pendingOrders } = await supabase
+        .from('orders')
+        .select('id, total_amount, created_at')
+        .eq('order_status', 'pending_payment')
         .order('created_at', { ascending: false })
-        .limit(50)
-      
-      // Combine all notifications
-      const combined: Notification[] = []
-      
-      // Add low stock notification if needed
-      if (lowStock && lowStock > 0) {
-        combined.push({
-          id: -1,
-          title: 'Low Stock Alert',
-          message: `There ${lowStock === 1 ? 'is' : 'are'} ${lowStock} product${lowStock > 1 ? 's' : ''} with low inventory. Please restock soon.`,
-          is_read: false,
-          created_at: new Date().toISOString(),
-          type: 'stock',
-          action_url: '/admin/products',
-          action_label: 'View Products'
-        })
-      }
-      
-      // Add pending order notifications
-      ordersWithUserNames.forEach(order => {
-        const paymentMethod = order.payment_method === 'cod' ? 'Cash on Delivery' : 
-                             order.payment_method === 'gcash' ? 'GCash' : 'Bank Transfer'
-        
-        combined.push({
-          id: -order.id,
-          title: 'New Order',
-          message: `Order #${order.id} from ${order.user_name} - ₱${order.total_amount.toLocaleString()} (${paymentMethod})`,
-          is_read: false,
-          created_at: order.created_at,
-          type: 'order',
-          action_url: `/admin/orders?order=${order.id}`,
-          action_label: 'View Order'
-        })
+        .limit(20)
+
+      ;((pendingOrders || []) as PendingOrder[]).forEach(order => {
+        const id = `order-${order.id}`
+        const exists = combined.some(notification =>
+          notification.id === id || notification.metadata?.order_id === order.id
+        )
+
+        if (!exists && !dismissedIds.has(id)) {
+          combined.push({
+            id,
+            type: 'new_order',
+            title: 'New Order Received',
+            message: `Order #${order.id} - PHP ${Number(order.total_amount || 0).toLocaleString()} needs processing`,
+            created_at: order.created_at,
+            is_read: false,
+            link: `/admin/orders?view=${order.id}`,
+            metadata: { order_id: order.id, total_amount: order.total_amount },
+          })
+        }
       })
-      
-      // Add database notifications
-      dbNotifs?.forEach(notif => {
-        combined.push({
-          ...notif,
-          type: 'system'
-        })
-      })
-      
-      // Sort by date (newest first)
+
       combined.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
-      
       setNotifications(combined)
-      setFilteredNotifications(combined)
-      
       notifyNavbar()
     } catch (error) {
       console.error('Error fetching notifications:', error)
     } finally {
       setLoading(false)
     }
-  }
+  }, [])
 
-  const filterNotifications = () => {
+  const filteredNotifications = useMemo(() => {
     let filtered = [...notifications]
-    
-    if (selectedFilter !== 'all') {
-      if (selectedFilter === 'unread') {
-        filtered = filtered.filter(n => !n.is_read)
-      } else {
-        filtered = filtered.filter(n => n.type === selectedFilter)
-      }
+
+    if (selectedFilter === 'unread') {
+      filtered = filtered.filter(notification => !notification.is_read)
+    } else if (selectedFilter !== 'all') {
+      filtered = filtered.filter(notification => notification.type === selectedFilter)
     }
-    
-    if (searchQuery) {
+
+    if (searchQuery.trim()) {
       const query = searchQuery.toLowerCase()
-      filtered = filtered.filter(n => 
-        n.title.toLowerCase().includes(query) || 
-        n.message.toLowerCase().includes(query)
+      filtered = filtered.filter(notification =>
+        notification.title.toLowerCase().includes(query) ||
+        notification.message.toLowerCase().includes(query)
       )
     }
-    
-    setFilteredNotifications(filtered)
-  }
 
-  const markAsRead = async (id: number) => {
-    if (id > 0) {
-      await supabase
-        .from('notifications')
-        .update({ is_read: true })
-        .eq('id', id)
+    return filtered
+  }, [notifications, searchQuery, selectedFilter])
+
+  const markAsRead = async (id: string) => {
+    if (isTemporaryNotification(id)) {
+      dismissIds([id])
+    } else {
+      const { data: { session } } = await supabase.auth.getSession()
+      await fetch('/api/admin/notifications', {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${session?.access_token}`,
+        },
+        body: JSON.stringify({ notificationId: id }),
+      })
     }
-    
+
     setNotifications(prev =>
-      prev.map(notif =>
-        notif.id === id ? { ...notif, is_read: true } : notif
+      prev.map(notification =>
+        notification.id === id ? { ...notification, is_read: true } : notification
       )
     )
-    
-    notifyNavbar()
-  }
-
-  const markAsUnread = async (id: number) => {
-    if (id > 0) {
-      await supabase
-        .from('notifications')
-        .update({ is_read: false })
-        .eq('id', id)
-    }
-    
-    setNotifications(prev =>
-      prev.map(notif =>
-        notif.id === id ? { ...notif, is_read: false } : notif
-      )
-    )
-    
     notifyNavbar()
   }
 
   const markAllAsRead = async () => {
-    const dbNotifs = notifications.filter(n => n.id > 0 && !n.is_read)
-    for (const notif of dbNotifs) {
-      await supabase
-        .from('notifications')
-        .update({ is_read: true })
-        .eq('id', notif.id)
+    const temporaryIds = notifications
+      .filter(notification => isTemporaryNotification(notification.id))
+      .map(notification => notification.id)
+
+    if (temporaryIds.length > 0) {
+      dismissIds(temporaryIds)
     }
-    
-    setNotifications(prev =>
-      prev.map(notif => ({ ...notif, is_read: true }))
+
+    const hasDatabaseUnread = notifications.some(notification =>
+      !isTemporaryNotification(notification.id) && !notification.is_read
     )
-    
-    notifyNavbar()
-  }
 
-  const deleteNotification = async (id: number, e: React.MouseEvent) => {
-    e.stopPropagation()
-    
-    if (id > 0) {
-      await supabase
-        .from('notifications')
-        .delete()
-        .eq('id', id)
+    if (hasDatabaseUnread) {
+      const { data: { session } } = await supabase.auth.getSession()
+      await fetch('/api/admin/notifications', {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${session?.access_token}`,
+        },
+        body: JSON.stringify({ markAll: true }),
+      })
     }
-    
-    setNotifications(prev => prev.filter(n => n.id !== id))
+
+    setNotifications(prev => prev.map(notification => ({ ...notification, is_read: true })))
     notifyNavbar()
   }
 
-  const getIcon = (type?: string) => {
+  const deleteNotification = async (id: string) => {
+    if (isTemporaryNotification(id)) {
+      dismissIds([id])
+    } else {
+      const { data: { session } } = await supabase.auth.getSession()
+      await fetch('/api/admin/notifications', {
+        method: 'DELETE',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${session?.access_token}`,
+        },
+        body: JSON.stringify({ notificationId: id }),
+      })
+    }
+
+    setNotifications(prev => prev.filter(notification => notification.id !== id))
+    notifyNavbar()
+  }
+
+  const getIcon = (type: AdminNotification['type']) => {
     switch (type) {
-      case 'order':
-        return <ShoppingBag className="w-5 h-5 text-black" />
-      case 'stock':
-        return <AlertTriangle className="w-5 h-5 text-black" />
-      case 'refund':
-        return <DollarSign className="w-5 h-5 text-black" />
-      case 'payment':
-        return <CreditCard className="w-5 h-5 text-black" />
-      case 'user':
-        return <Users className="w-5 h-5 text-black" />
+      case 'low_stock':
+        return <AlertTriangle className="h-5 w-5 text-red-500" />
+      case 'new_order':
+        return <ShoppingBag className="h-5 w-5 text-green-600" />
+      case 'pending_refund':
+        return <CreditCard className="h-5 w-5 text-purple-500" />
+      case 'pending_review':
+        return <Star className="h-5 w-5 text-blue-500" />
       default:
-        return <Bell className="w-5 h-5 text-black" />
+        return <Bell className="h-5 w-5 text-gray-500" />
     }
   }
 
-  const getTimeAgo = (dateString: string) => {
-    const date = new Date(dateString)
-    const now = new Date()
-    const diffMs = now.getTime() - date.getTime()
-    const diffMins = Math.floor(diffMs / 60000)
-    const diffHours = Math.floor(diffMs / 3600000)
-    const diffDays = Math.floor(diffMs / 86400000)
-    
-    if (diffMins < 1) return 'Just now'
-    if (diffMins < 60) return `${diffMins} min ago`
-    if (diffHours < 24) return `${diffHours} hr${diffHours > 1 ? 's' : ''} ago`
-    return `${diffDays} day${diffDays > 1 ? 's' : ''} ago`
-  }
+  useEffect(() => {
+    void Promise.resolve().then(() => fetchAllData())
 
-  const unreadCount = notifications.filter(n => !n.is_read).length
+    const channel = supabase
+      .channel('admin-notifications-page')
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'admin_notifications' },
+        () => void fetchAllData()
+      )
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'orders' },
+        () => void fetchAllData()
+      )
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'products' },
+        () => void fetchAllData()
+      )
+      .subscribe()
 
-  const filterOptions: { value: FilterType; label: string; icon: any }[] = [
+    return () => {
+      void supabase.removeChannel(channel)
+    }
+  }, [fetchAllData])
+
+  const unreadCount = notifications.filter(notification => !notification.is_read).length
+  const lowStockCount = notifications.filter(notification => notification.type === 'low_stock').length
+  const orderCount = notifications.filter(notification => notification.type === 'new_order').length
+  const refundCount = notifications.filter(notification => notification.type === 'pending_refund').length
+
+  const filterOptions: { value: FilterType; label: string; icon: typeof Bell }[] = [
     { value: 'all', label: 'All', icon: Bell },
     { value: 'unread', label: 'Unread', icon: Eye },
-    { value: 'order', label: 'Orders', icon: ShoppingBag },
-    { value: 'stock', label: 'Stock', icon: AlertTriangle },
-    { value: 'refund', label: 'Refunds', icon: DollarSign },
+    { value: 'new_order', label: 'Orders', icon: ShoppingBag },
+    { value: 'low_stock', label: 'Stock', icon: AlertTriangle },
+    { value: 'pending_refund', label: 'Refunds', icon: CreditCard },
   ]
 
   if (loading) {
     return (
-      <div className="flex items-center justify-center h-64">
-        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-black"></div>
+      <div className="flex h-64 items-center justify-center">
+        <div className="h-12 w-12 animate-spin rounded-full border-b-2 border-black" />
       </div>
     )
   }
 
   return (
     <div className="space-y-6">
-      {/* Header */}
-      <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
+      <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <h1 className="text-3xl font-bold text-black">Notifications</h1>
-          <p className="text-gray-500 text-sm mt-1">
-            {unreadCount > 0 
+          <p className="mt-1 text-sm text-gray-500">
+            {unreadCount > 0
               ? `You have ${unreadCount} unread notification${unreadCount > 1 ? 's' : ''}`
               : 'All caught up!'}
           </p>
         </div>
-        <div className="flex gap-2">
+
+        <div className="flex flex-wrap gap-2">
           <button
             onClick={() => setShowFilters(!showFilters)}
-            className="flex items-center gap-2 px-4 py-2 rounded-xl border border-gray-300 bg-white text-gray-600 hover:bg-gray-50 transition"
+            className="flex items-center gap-2 rounded-xl border border-gray-300 bg-white px-4 py-2 text-gray-600 transition hover:bg-gray-50"
           >
-            <Filter className="w-4 h-4" />
+            <Filter className="h-4 w-4" />
             Filter
           </button>
           <button
-            onClick={fetchAllData}
-            className="flex items-center gap-2 px-4 py-2 rounded-xl border border-gray-300 bg-white text-gray-600 hover:bg-gray-50 transition"
+            onClick={() => void fetchAllData()}
+            className="flex items-center gap-2 rounded-xl border border-gray-300 bg-white px-4 py-2 text-gray-600 transition hover:bg-gray-50"
           >
-            <RefreshCw className="w-4 h-4" />
+            <RefreshCw className="h-4 w-4" />
             Refresh
           </button>
           {unreadCount > 0 && (
             <button
-              onClick={markAllAsRead}
-              className="flex items-center gap-2 px-4 py-2 rounded-xl bg-black text-white font-semibold hover:bg-gray-800 transition"
+              onClick={() => void markAllAsRead()}
+              className="flex items-center gap-2 rounded-xl bg-black px-4 py-2 font-semibold text-white transition hover:bg-gray-800"
             >
-              <CheckCircle className="w-4 h-4" />
+              <CheckCircle className="h-4 w-4" />
               Mark all as read
             </button>
           )}
         </div>
       </div>
 
-      {/* Stats Cards - Simple Black & White */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-        <div className="bg-white rounded-xl p-4 border border-gray-200 shadow-sm">
-          <div className="flex items-center justify-between">
-            <div>
-              <p className="text-2xl font-bold text-black">{stats.totalOrders}</p>
-              <p className="text-xs text-gray-500 mt-1">Orders Today</p>
-            </div>
-            <div className="p-2 rounded-lg bg-gray-100">
-              <ShoppingBag className="w-5 h-5 text-black" />
-            </div>
-          </div>
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+        <div className="rounded-xl border border-gray-200 bg-white p-4 shadow-sm">
+          <p className="text-2xl font-bold text-black">{notifications.length}</p>
+          <p className="mt-1 text-xs text-gray-500">Total Alerts</p>
         </div>
-        <div className="bg-white rounded-xl p-4 border border-gray-200 shadow-sm">
-          <div className="flex items-center justify-between">
-            <div>
-              <p className="text-2xl font-bold text-black">₱{stats.totalRevenue.toLocaleString()}</p>
-              <p className="text-xs text-gray-500 mt-1">Revenue (30d)</p>
-            </div>
-            <div className="p-2 rounded-lg bg-gray-100">
-              <TrendingUp className="w-5 h-5 text-black" />
-            </div>
-          </div>
+        <div className="rounded-xl border border-gray-200 bg-white p-4 shadow-sm">
+          <p className="text-2xl font-bold text-black">{orderCount}</p>
+          <p className="mt-1 text-xs text-gray-500">Order Alerts</p>
         </div>
-        <div className="bg-white rounded-xl p-4 border border-gray-200 shadow-sm">
-          <div className="flex items-center justify-between">
-            <div>
-              <p className="text-2xl font-bold text-black">{stats.totalUsers.toLocaleString()}</p>
-              <p className="text-xs text-gray-500 mt-1">Total Users</p>
-            </div>
-            <div className="p-2 rounded-lg bg-gray-100">
-              <Users className="w-5 h-5 text-black" />
-            </div>
-          </div>
+        <div className="rounded-xl border border-gray-200 bg-white p-4 shadow-sm">
+          <p className="text-2xl font-bold text-black">{lowStockCount}</p>
+          <p className="mt-1 text-xs text-gray-500">Low Stock Items</p>
         </div>
-        <div className="bg-white rounded-xl p-4 border border-gray-200 shadow-sm">
-          <div className="flex items-center justify-between">
-            <div>
-              <p className="text-2xl font-bold text-black">{lowStockCount}</p>
-              <p className="text-xs text-gray-500 mt-1">Low Stock Items</p>
-            </div>
-            <div className="p-2 rounded-lg bg-gray-100">
-              <AlertTriangle className="w-5 h-5 text-black" />
-            </div>
-          </div>
+        <div className="rounded-xl border border-gray-200 bg-white p-4 shadow-sm">
+          <p className="text-2xl font-bold text-black">{refundCount}</p>
+          <p className="mt-1 text-xs text-gray-500">Refund Alerts</p>
         </div>
       </div>
 
-      {/* Search and Filters */}
       <div className="space-y-3">
         <div className="relative">
-          <Search className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
+          <Search className="absolute left-4 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" />
           <input
             type="text"
             placeholder="Search notifications..."
             value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            className="w-full pl-11 pr-4 py-3 rounded-xl border border-gray-200 bg-white text-gray-700 placeholder-gray-400 focus:outline-none focus:border-black focus:ring-1 focus:ring-black transition"
+            onChange={(event) => setSearchQuery(event.target.value)}
+            className="w-full rounded-xl border border-gray-200 bg-white py-3 pl-11 pr-4 text-gray-700 placeholder-gray-400 transition focus:border-black focus:outline-none focus:ring-1 focus:ring-black"
           />
         </div>
 
         {showFilters && (
-          <div className="flex flex-wrap gap-2 p-3 rounded-xl bg-gray-50 border border-gray-200">
-            {filterOptions.map((option) => {
+          <div className="flex flex-wrap gap-2 rounded-xl border border-gray-200 bg-gray-50 p-3">
+            {filterOptions.map(option => {
               const Icon = option.icon
               const isActive = selectedFilter === option.value
+
               return (
                 <button
                   key={option.value}
                   onClick={() => setSelectedFilter(option.value)}
-                  className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm font-medium transition ${
+                  className={`flex items-center gap-2 rounded-lg px-3 py-1.5 text-sm font-medium transition ${
                     isActive
                       ? 'bg-black text-white'
-                      : 'bg-white text-gray-600 border border-gray-200 hover:bg-gray-50'
+                      : 'border border-gray-200 bg-white text-gray-600 hover:bg-gray-50'
                   }`}
                 >
-                  <Icon className="w-3.5 h-3.5" />
+                  <Icon className="h-3.5 w-3.5" />
                   {option.label}
-                  {option.value === 'unread' && unreadCount > 0 && (
-                    <span className={`ml-1 px-1.5 py-0.5 text-xs rounded-full ${
-                      isActive ? 'bg-white text-black' : 'bg-gray-200 text-gray-700'
-                    }`}>
-                      {unreadCount}
-                    </span>
-                  )}
                 </button>
               )
             })}
@@ -485,98 +410,70 @@ export default function AdminNotificationsPage() {
         )}
       </div>
 
-      {/* Notifications List - Clean Layout */}
-      <div className="rounded-xl border border-gray-200 bg-white overflow-hidden shadow-sm">
+      <div className="overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm">
         {filteredNotifications.length === 0 ? (
-          <div className="text-center py-16">
-            <div className="w-20 h-20 rounded-full bg-gray-100 flex items-center justify-center mx-auto mb-4">
-              <Bell className="w-10 h-10 text-gray-400" />
+          <div className="py-16 text-center">
+            <div className="mx-auto mb-4 flex h-20 w-20 items-center justify-center rounded-full bg-gray-100">
+              <Bell className="h-10 w-10 text-gray-400" />
             </div>
-            <p className="text-gray-500 font-medium">No notifications found</p>
-            <p className="text-sm text-gray-400 mt-1">
-              {searchQuery ? 'Try adjusting your search or filters' : 'When important events happen, they\'ll appear here'}
+            <p className="font-medium text-gray-500">No notifications found</p>
+            <p className="mt-1 text-sm text-gray-400">
+              {searchQuery ? 'Try adjusting your search or filters' : 'When important events happen, they will appear here'}
             </p>
           </div>
         ) : (
           <div className="divide-y divide-gray-100">
-            {filteredNotifications.map((notif) => (
+            {filteredNotifications.map(notification => (
               <div
-                key={notif.id}
-                className={`group p-5 transition-all duration-200 ${
-                  !notif.is_read ? 'bg-gray-50' : 'hover:bg-gray-50'
-                }`}
+                key={notification.id}
+                className={`p-5 transition ${notification.is_read ? 'hover:bg-gray-50' : 'bg-gray-50'}`}
               >
                 <div className="flex gap-4">
-                  {/* Icon */}
-                  <div className="flex-shrink-0">
-                    <div className="p-2.5 rounded-xl bg-gray-100">
-                      {getIcon(notif.type)}
-                    </div>
+                  <div className="shrink-0 rounded-xl bg-gray-100 p-2.5">
+                    {getIcon(notification.type)}
                   </div>
-                  
-                  {/* Content */}
-                  <div className="flex-1 min-w-0">
-                    <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-2">
-                      <div className="flex-1">
+
+                  <div className="min-w-0 flex-1">
+                    <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+                      <div>
                         <div className="flex flex-wrap items-center gap-2">
-                          <h3 className={`font-semibold text-sm sm:text-base ${
-                            !notif.is_read ? 'text-black' : 'text-gray-700'
-                          }`}>
-                            {notif.title}
-                          </h3>
-                          <span className="text-xs text-gray-400 flex items-center gap-1">
-                            <Clock className="w-3 h-3" />
-                            {getTimeAgo(notif.created_at)}
-                          </span>
+                          <h3 className="font-semibold text-black">{notification.title}</h3>
+                          {!notification.is_read && (
+                            <span className="rounded-full bg-yellow-400 px-2 py-0.5 text-[10px] font-bold text-black">
+                              New
+                            </span>
+                          )}
                         </div>
-                        <p className="text-sm text-gray-500 mt-2 leading-relaxed">
-                          {notif.message}
+                        <p className="mt-2 text-sm leading-relaxed text-gray-500">{notification.message}</p>
+                        <p className="mt-2 text-xs text-gray-400">
+                          {new Date(notification.created_at).toLocaleString('en-PH')}
                         </p>
-                        
-                        {/* Action Button */}
-                        {notif.action_url && (
+                        {notification.link && (
                           <Link
-                            href={notif.action_url}
-                            className="inline-flex items-center gap-1.5 mt-3 text-sm font-medium text-black hover:text-gray-600 transition group/link"
-                            onClick={(e) => e.stopPropagation()}
+                            href={notification.link}
+                            className="mt-3 inline-flex items-center gap-1.5 text-sm font-medium text-black hover:text-gray-600"
                           >
-                            {notif.action_label || 'View Details'}
-                            <ChevronRight className="w-4 h-4 transition-transform group-hover/link:translate-x-0.5" />
+                            View details
                           </Link>
                         )}
                       </div>
-                      
-                      {/* Action Buttons */}
-                      <div className="flex items-center gap-1">
-                        {!notif.is_read ? (
+
+                      <div className="flex shrink-0 items-center gap-1">
+                        {!notification.is_read && (
                           <button
-                            onClick={(e) => {
-                              e.stopPropagation()
-                              markAsRead(notif.id)
-                            }}
-                            className="p-2 rounded-lg text-gray-400 hover:text-black hover:bg-gray-100 transition"
+                            onClick={() => void markAsRead(notification.id)}
+                            className="rounded-lg p-2 text-gray-400 transition hover:bg-gray-100 hover:text-black"
                             title="Mark as read"
                           >
-                            <Eye className="w-4 h-4" />
-                          </button>
-                        ) : (
-                          <button
-                            onClick={(e) => {
-                              e.stopPropagation()
-                              markAsUnread(notif.id)
-                            }}
-                            className="p-2 rounded-lg text-gray-400 hover:text-black hover:bg-gray-100 transition"
-                            title="Mark as unread"
-                          >
-                            <EyeOff className="w-4 h-4" />
+                            <Eye className="h-4 w-4" />
                           </button>
                         )}
                         <button
-                          onClick={(e) => deleteNotification(notif.id, e)}
-                          className="p-2 rounded-lg text-gray-400 hover:text-red-500 hover:bg-red-50 transition"
+                          onClick={() => void deleteNotification(notification.id)}
+                          className="rounded-lg p-2 text-gray-400 transition hover:bg-red-50 hover:text-red-500"
                           title="Delete"
                         >
-                          <Trash2 className="w-4 h-4" />
+                          <Trash2 className="h-4 w-4" />
                         </button>
                       </div>
                     </div>
@@ -586,11 +483,10 @@ export default function AdminNotificationsPage() {
             ))}
           </div>
         )}
-        
-        {/* Footer */}
+
         {filteredNotifications.length > 0 && (
-          <div className="px-5 py-3 border-t border-gray-100 bg-gray-50">
-            <p className="text-xs text-gray-400 text-center">
+          <div className="border-t border-gray-100 bg-gray-50 px-5 py-3">
+            <p className="text-center text-xs text-gray-400">
               Showing {filteredNotifications.length} of {notifications.length} notifications
             </p>
           </div>

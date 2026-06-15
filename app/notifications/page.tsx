@@ -1,217 +1,273 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { supabase } from '@/lib/supabase'
-import { Bell, Package, CreditCard, Star, AlertTriangle, CheckCheck, Trash2, Eye } from 'lucide-react'
+import { Bell, CheckCheck, Trash2, Eye, Package, Ticket, Star, CreditCard } from 'lucide-react'
 
-interface AdminNotification {
-  id: string
-  type: 'low_stock' | 'new_order' | 'pending_refund' | 'pending_review'
+interface UserNotification {
+  id: number
   title: string
   message: string
   is_read: boolean
   created_at: string
-  link: string
-  metadata?: any
+  user_id: string
+  type?: string | null
+  link?: string | null
 }
 
-export default function AdminNotificationsPage() {
+export default function NotificationsPage() {
   const router = useRouter()
-  const [notifications, setNotifications] = useState<AdminNotification[]>([])
+  const [notifications, setNotifications] = useState<UserNotification[]>([])
   const [loading, setLoading] = useState(true)
+  const [userId, setUserId] = useState<string | null>(null)
 
-  const fetchNotifications = async () => {
+  const fetchNotifications = useCallback(async (currentUserId?: string) => {
+    const activeUserId = currentUserId || userId
+    if (!activeUserId) return
+
     setLoading(true)
     try {
       const { data, error } = await supabase
-        .from('admin_notifications')
+        .from('notifications')
         .select('*')
+        .eq('user_id', activeUserId)
         .order('created_at', { ascending: false })
 
-      if (!error && data) {
-        setNotifications(data as AdminNotification[])
+      if (error) {
+        console.error('Error fetching notifications:', error)
+        return
       }
-    } catch (error) {
-      console.error('Error fetching notifications:', error)
+
+      setNotifications((data || []) as UserNotification[])
     } finally {
       setLoading(false)
     }
-  }
+  }, [userId])
 
-  const markAsRead = async (id: string) => {
+  const markAsRead = async (id: number) => {
     const { error } = await supabase
-      .from('admin_notifications')
-      .update({ is_read: true, updated_at: new Date().toISOString() })
+      .from('notifications')
+      .update({ is_read: true })
       .eq('id', id)
+      .eq('user_id', userId)
 
     if (!error) {
       setNotifications(prev =>
-        prev.map(n => n.id === id ? { ...n, is_read: true } : n)
+        prev.map(notification =>
+          notification.id === id ? { ...notification, is_read: true } : notification
+        )
       )
     }
   }
 
   const markAllAsRead = async () => {
+    if (!userId) return
+
     const { error } = await supabase
-      .from('admin_notifications')
-      .update({ is_read: true, updated_at: new Date().toISOString() })
+      .from('notifications')
+      .update({ is_read: true })
+      .eq('user_id', userId)
       .eq('is_read', false)
 
     if (!error) {
-      setNotifications(prev =>
-        prev.map(n => ({ ...n, is_read: true }))
-      )
+      setNotifications(prev => prev.map(notification => ({ ...notification, is_read: true })))
     }
   }
 
-  const deleteNotification = async (id: string) => {
+  const deleteNotification = async (id: number) => {
     const { error } = await supabase
-      .from('admin_notifications')
+      .from('notifications')
       .delete()
       .eq('id', id)
+      .eq('user_id', userId)
 
     if (!error) {
-      setNotifications(prev => prev.filter(n => n.id !== id))
+      setNotifications(prev => prev.filter(notification => notification.id !== id))
     }
   }
 
-  const getNotificationIcon = (type: string) => {
-    switch (type) {
-      case 'low_stock':
-        return <AlertTriangle className="h-5 w-5 text-red-400" />
-      case 'new_order':
-        return <Package className="h-5 w-5 text-green-400" />
-      case 'pending_refund':
-        return <CreditCard className="h-5 w-5 text-purple-400" />
-      case 'pending_review':
-        return <Star className="h-5 w-5 text-blue-400" />
-      default:
-        return <Bell className="h-5 w-5 text-gray-400" />
+  const openNotification = async (notification: UserNotification) => {
+    if (!notification.is_read) {
+      await markAsRead(notification.id)
     }
+
+    if (notification.link) {
+      router.push(notification.link)
+      return
+    }
+
+    if (notification.type === 'voucher_received') {
+      router.push('/my-vouchers')
+    } else if (notification.type === 'review_reply') {
+      router.push('/reviews')
+    } else if (notification.type === 'payment_update') {
+      router.push('/orders')
+    } else {
+      router.push('/orders')
+    }
+  }
+
+  const getIcon = (notification: UserNotification) => {
+    if (notification.type === 'voucher_received') {
+      return <Ticket className="h-5 w-5 text-yellow-500" />
+    }
+
+    if (notification.type === 'review_reply') {
+      return <Star className="h-5 w-5 text-blue-500" />
+    }
+
+    if (notification.type === 'payment_update' || notification.title.toLowerCase().includes('payment')) {
+      return <CreditCard className="h-5 w-5 text-green-500" />
+    }
+
+    if (notification.title.toLowerCase().includes('order')) {
+      return <Package className="h-5 w-5 text-black" />
+    }
+
+    return <Bell className="h-5 w-5 text-gray-500" />
   }
 
   useEffect(() => {
-    fetchNotifications()
+    const loadSession = async () => {
+      const { data: { session } } = await supabase.auth.getSession()
 
-    // Subscribe to real-time changes
+      if (!session?.user) {
+        router.push('/login')
+        return
+      }
+
+      setUserId(session.user.id)
+      await fetchNotifications(session.user.id)
+    }
+
+    void Promise.resolve().then(() => loadSession())
+  }, [fetchNotifications, router])
+
+  useEffect(() => {
+    if (!userId) return
+
     const channel = supabase
-      .channel('admin-notifications')
+      .channel('notifications-page')
       .on(
         'postgres_changes',
-        { event: '*', schema: 'public', table: 'admin_notifications' },
-        () => fetchNotifications()
+        {
+          event: '*',
+          schema: 'public',
+          table: 'notifications',
+          filter: `user_id=eq.${userId}`,
+        },
+        () => {
+          void fetchNotifications(userId)
+        }
       )
       .subscribe()
 
     return () => {
-      supabase.removeChannel(channel)
+      void supabase.removeChannel(channel)
     }
-  }, [])
+  }, [fetchNotifications, userId])
 
-  const unreadCount = notifications.filter(n => !n.is_read).length
+  const unreadCount = notifications.filter(notification => !notification.is_read).length
 
   return (
-    <div className="p-6">
-      <div className="flex justify-between items-center mb-6">
-        <div>
-          <h1 className="text-2xl font-bold text-white">Notifications</h1>
-          <p className="text-gray-400 text-sm mt-1">
-            System alerts and updates
-          </p>
-        </div>
-        <div className="flex gap-3">
-          {unreadCount > 0 && (
-            <button
-              onClick={markAllAsRead}
-              className="flex items-center gap-2 px-4 py-2 bg-yellow-400/10 border border-yellow-400/30 rounded-lg text-yellow-400 hover:bg-yellow-400/20 transition"
-            >
-              <CheckCheck className="h-4 w-4" />
-              Mark all as read
-            </button>
-          )}
-          <button
-            onClick={fetchNotifications}
-            className="flex items-center gap-2 px-4 py-2 bg-white/5 border border-white/10 rounded-lg text-gray-300 hover:bg-white/10 transition"
-          >
-            <Bell className="h-4 w-4" />
-            Refresh
-          </button>
-        </div>
-      </div>
+    <main className="min-h-screen bg-[#f6f6f4] px-4 py-8 text-black sm:px-6 lg:px-8">
+      <div className="mx-auto max-w-5xl">
+        <div className="mb-6 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+          <div>
+            <h1 className="text-3xl font-bold">Notifications</h1>
+            <p className="mt-1 text-sm text-gray-500">
+              {unreadCount > 0
+                ? `You have ${unreadCount} unread notification${unreadCount > 1 ? 's' : ''}`
+                : 'All caught up!'}
+            </p>
+          </div>
 
-      {loading ? (
-        <div className="flex justify-center items-center py-20">
-          <div className="animate-spin rounded-full h-8 w-8 border-2 border-yellow-400 border-t-transparent"></div>
-        </div>
-      ) : notifications.length === 0 ? (
-        <div className="text-center py-20 bg-black/30 rounded-xl border border-white/10">
-          <Bell className="h-16 w-16 text-gray-600 mx-auto mb-4" />
-          <h3 className="text-xl font-semibold text-white mb-2">No notifications</h3>
-          <p className="text-gray-400">All caught up! No new alerts to display.</p>
-        </div>
-      ) : (
-        <div className="space-y-3">
-          {notifications.map((notification) => (
-            <div
-              key={notification.id}
-              className={`bg-black/30 border rounded-xl p-4 transition ${
-                !notification.is_read
-                  ? 'border-yellow-400/30 bg-yellow-400/5'
-                  : 'border-white/10'
-              }`}
+          <div className="flex gap-2">
+            <button
+              onClick={() => void fetchNotifications()}
+              className="rounded-xl border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 transition hover:border-black"
             >
-              <div className="flex items-start gap-4">
-                <div className="flex-shrink-0">
-                  {getNotificationIcon(notification.type)}
-                </div>
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-start justify-between gap-2">
-                    <div>
-                      <h3 className="text-white font-semibold">
-                        {notification.title}
-                      </h3>
-                      <p className="text-gray-400 text-sm mt-1">
-                        {notification.message}
-                      </p>
-                      <p className="text-gray-500 text-xs mt-2">
-                        {new Date(notification.created_at).toLocaleString()}
-                      </p>
+              Refresh
+            </button>
+            {unreadCount > 0 && (
+              <button
+                onClick={() => void markAllAsRead()}
+                className="flex items-center gap-2 rounded-xl bg-black px-4 py-2 text-sm font-semibold text-white transition hover:bg-gray-800"
+              >
+                <CheckCheck className="h-4 w-4" />
+                Mark all as read
+              </button>
+            )}
+          </div>
+        </div>
+
+        <div className="overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm">
+          {loading ? (
+            <div className="flex items-center justify-center py-20">
+              <div className="h-8 w-8 animate-spin rounded-full border-2 border-black border-t-transparent" />
+            </div>
+          ) : notifications.length === 0 ? (
+            <div className="py-20 text-center">
+              <Bell className="mx-auto mb-4 h-14 w-14 text-gray-300" />
+              <h2 className="text-lg font-semibold">No notifications yet</h2>
+              <p className="mt-1 text-sm text-gray-500">Order updates, voucher alerts, and messages will appear here.</p>
+            </div>
+          ) : (
+            <div className="divide-y divide-gray-100">
+              {notifications.map(notification => (
+                <div
+                  key={notification.id}
+                  className={`p-5 transition ${notification.is_read ? 'hover:bg-gray-50' : 'bg-yellow-50/60 hover:bg-yellow-50'}`}
+                >
+                  <div className="flex items-start gap-4">
+                    <div className="rounded-xl bg-gray-100 p-2.5">
+                      {getIcon(notification)}
                     </div>
-                    <div className="flex gap-2">
+
+                    <button
+                      onClick={() => void openNotification(notification)}
+                      className="min-w-0 flex-1 text-left"
+                    >
+                      <div className="flex flex-wrap items-center gap-2">
+                        <h2 className="font-semibold text-gray-900">{notification.title}</h2>
+                        {!notification.is_read && (
+                          <span className="rounded-full bg-yellow-400 px-2 py-0.5 text-[10px] font-bold text-black">
+                            New
+                          </span>
+                        )}
+                      </div>
+                      <p className="mt-1 text-sm leading-relaxed text-gray-600">{notification.message}</p>
+                      <p className="mt-2 text-xs text-gray-400">
+                        {new Date(notification.created_at).toLocaleString('en-PH')}
+                      </p>
+                    </button>
+
+                    <div className="flex shrink-0 gap-1">
                       {!notification.is_read && (
                         <button
-                          onClick={() => markAsRead(notification.id)}
-                          className="p-1.5 text-gray-400 hover:text-yellow-400 transition"
+                          onClick={() => void markAsRead(notification.id)}
+                          className="rounded-lg p-2 text-gray-400 transition hover:bg-gray-100 hover:text-black"
                           title="Mark as read"
-                        >
-                          <CheckCheck className="h-4 w-4" />
-                        </button>
-                      )}
-                      <button
-                        onClick={() => deleteNotification(notification.id)}
-                        className="p-1.5 text-gray-400 hover:text-red-400 transition"
-                        title="Delete"
-                      >
-                        <Trash2 className="h-4 w-4" />
-                      </button>
-                      {notification.link && (
-                        <button
-                          onClick={() => router.push(notification.link)}
-                          className="p-1.5 text-gray-400 hover:text-blue-400 transition"
-                          title="View details"
                         >
                           <Eye className="h-4 w-4" />
                         </button>
                       )}
+                      <button
+                        onClick={() => void deleteNotification(notification.id)}
+                        className="rounded-lg p-2 text-gray-400 transition hover:bg-red-50 hover:text-red-500"
+                        title="Delete"
+                      >
+                        <Trash2 className="h-4 w-4" />
+                      </button>
                     </div>
                   </div>
                 </div>
-              </div>
+              ))}
             </div>
-          ))}
+          )}
         </div>
-      )}
-    </div>
+      </div>
+    </main>
   )
 }

@@ -99,3 +99,34 @@ export async function PATCH(request: NextRequest) {
 
   return NextResponse.json({ success: true })
 }
+
+export async function DELETE(request: NextRequest) {
+  const staffCheck = await requireStaff(request)
+
+  if ('error' in staffCheck) {
+    return NextResponse.json(
+      { error: staffCheck.error },
+      { status: staffCheck.status }
+    )
+  }
+
+  const { notificationId } = await request.json()
+
+  if (!notificationId) {
+    return NextResponse.json(
+      { error: 'Missing notification id' },
+      { status: 400 }
+    )
+  }
+
+  const { error } = await supabaseAdmin
+    .from('admin_notifications')
+    .delete()
+    .eq('id', notificationId)
+
+  if (error) {
+    return NextResponse.json({ error: error.message }, { status: 500 })
+  }
+
+  return NextResponse.json({ success: true })
+}

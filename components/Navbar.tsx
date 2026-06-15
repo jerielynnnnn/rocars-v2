@@ -1211,22 +1211,12 @@ export default function Navbar() {
               <Link href="/support" onClick={() => setMobileMenuOpen(false)} className="px-4 py-3 text-gray-300 hover:bg-white/10 rounded-lg">Support</Link>
               <Link href="/shipping" onClick={() => setMobileMenuOpen(false)} className="px-4 py-3 text-gray-300 hover:bg-white/10 rounded-lg">Shipping</Link>
               <Link href="/about" onClick={() => setMobileMenuOpen(false)} className="px-4 py-3 text-gray-300 hover:bg-white/10 rounded-lg">About</Link>
-              {isLoggedIn && (
+              {isLoggedIn && isStaff && (
                 <>
-                  <Link href="/profile" onClick={() => setMobileMenuOpen(false)} className="px-4 py-3 text-gray-300 hover:bg-white/10 rounded-lg">Profile</Link>
-                  <Link href="/orders" onClick={() => setMobileMenuOpen(false)} className="px-4 py-3 text-gray-300 hover:bg-white/10 rounded-lg">Orders</Link>
-                  <Link href="/reviews" onClick={() => setMobileMenuOpen(false)} className="px-4 py-3 text-gray-300 hover:bg-white/10 rounded-lg">Reviews</Link>
-                  <Link href="/wishlist" onClick={() => setMobileMenuOpen(false)} className="px-4 py-3 text-gray-300 hover:bg-white/10 rounded-lg">Wishlist</Link>
-                  <Link href="/my-vouchers" onClick={() => setMobileMenuOpen(false)} className="px-4 py-3 text-gray-300 hover:bg-white/10 rounded-lg">My Vouchers</Link>
-                  {isStaff && (
-                    <>
-                      <Link href={adminHomeHref} onClick={() => setMobileMenuOpen(false)} className="px-4 py-3 text-yellow-400 hover:bg-yellow-400/10 rounded-lg">{isAdmin ? 'Admin Panel' : 'Staff Panel'}</Link>
-                      {isAdmin && (
-                        <Link href="/admin/staff" onClick={() => setMobileMenuOpen(false)} className="px-4 py-3 text-yellow-400 hover:bg-yellow-400/10 rounded-lg">Staff Page</Link>
-                      )}
-                    </>
+                  <Link href={adminHomeHref} onClick={() => setMobileMenuOpen(false)} className="px-4 py-3 text-yellow-400 hover:bg-yellow-400/10 rounded-lg">{isAdmin ? 'Admin Panel' : 'Staff Panel'}</Link>
+                  {isAdmin && (
+                    <Link href="/admin/staff" onClick={() => setMobileMenuOpen(false)} className="px-4 py-3 text-yellow-400 hover:bg-yellow-400/10 rounded-lg">Staff Page</Link>
                   )}
-                  <button onClick={handleLogout} className="px-4 py-3 text-red-400 hover:bg-red-500/10 rounded-lg text-left">Sign Out</button>
                 </>
               )}
             </div>
