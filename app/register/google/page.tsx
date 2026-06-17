@@ -20,6 +20,12 @@ export default function GoogleRegisterPage() {
 
   const [userId, setUserId] = useState<string | null>(null)
 
+  const cleanUsername = (value: string) =>
+    value.toLowerCase().replace(/[^a-z0-9]/g, '')
+
+  const getErrorMessage = (err: unknown) =>
+    err instanceof Error ? err.message : 'Something went wrong'
+
   useEffect(() => {
     const loadGoogleUser = async () => {
       const {
@@ -36,13 +42,29 @@ export default function GoogleRegisterPage() {
       setUserId(user.id)
 
       const fullName = user.user_metadata?.full_name || ''
+      const fallbackUsername = cleanUsername(
+        user.user_metadata?.username || user.email?.split('@')[0] || ''
+      )
+
+      const { data: profile } = await supabase
+        .from('profiles')
+        .select('username, first_name, last_name, avatar_url, provider')
+        .eq('id', user.id)
+        .maybeSingle()
+
+      if (profile?.username && profile.provider === 'google') {
+        router.replace('/')
+        return
+      }
 
       setForm((prev) => ({
         ...prev,
         email: user.email || '',
-        firstName: fullName.split(' ')[0] || '',
-        lastName: fullName.split(' ').slice(1).join(' ') || '',
-        avatar: user.user_metadata?.avatar_url || '',
+        firstName: profile?.first_name || fullName.split(' ')[0] || '',
+        lastName:
+          profile?.last_name || fullName.split(' ').slice(1).join(' ') || '',
+        avatar: profile?.avatar_url || user.user_metadata?.avatar_url || '',
+        username: profile?.username || fallbackUsername,
       }))
     }
 
@@ -58,6 +80,10 @@ export default function GoogleRegisterPage() {
 
       if (!form.username) {
         throw new Error('Username is required')
+      }
+
+      if (form.username.length < 3) {
+        throw new Error('Username must be at least 3 characters')
       }
 
       const {
@@ -84,9 +110,9 @@ export default function GoogleRegisterPage() {
       }
 
       router.push('/')
-    } catch (err: any) {
+    } catch (err) {
       console.error(err)
-      setError(err.message || 'Something went wrong')
+      setError(getErrorMessage(err))
     } finally {
       setLoading(false)
     }
@@ -138,7 +164,7 @@ export default function GoogleRegisterPage() {
             placeholder="Username"
             value={form.username}
             onChange={(e) =>
-              setForm({ ...form, username: e.target.value })
+              setForm({ ...form, username: cleanUsername(e.target.value) })
             }
             className="w-full border rounded-2xl px-4 py-3"
           />

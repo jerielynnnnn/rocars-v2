@@ -23,6 +23,17 @@ type OAuthUser = {
 
 function getPublicOrigin(request: Request) {
   const requestUrl = new URL(request.url)
+  const forwardedHost = request.headers.get('x-forwarded-host')
+  const forwardedProto = request.headers.get('x-forwarded-proto') || 'https'
+
+  if (forwardedHost && forwardedHost !== '0.0.0.0:8080') {
+    return `${forwardedProto}://${forwardedHost}`
+  }
+
+  if (requestUrl.hostname !== '0.0.0.0') {
+    return requestUrl.origin
+  }
+
   const configuredOrigin =
     process.env.NEXT_PUBLIC_SITE_URL ||
     process.env.NEXT_PUBLIC_APP_URL ||
@@ -33,17 +44,6 @@ function getPublicOrigin(request: Request) {
 
   if (configuredOrigin) {
     return configuredOrigin.replace(/\/$/, '')
-  }
-
-  const forwardedHost = request.headers.get('x-forwarded-host')
-  const forwardedProto = request.headers.get('x-forwarded-proto') || 'https'
-
-  if (forwardedHost && forwardedHost !== '0.0.0.0:8080') {
-    return `${forwardedProto}://${forwardedHost}`
-  }
-
-  if (requestUrl.hostname !== '0.0.0.0') {
-    return requestUrl.origin
   }
 
   return FALLBACK_PUBLIC_ORIGIN
@@ -146,28 +146,43 @@ export async function GET(request: Request) {
 
   if (code) {
     const cookieStore = await cookies()
+    const authCookies: {
+      name: string
+      value: string
+      options: CookieOptions
+    }[] = []
+
     const supabase = createServerClient(
       process.env.NEXT_PUBLIC_SUPABASE_URL!,
       process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
       {
         cookies: {
-          get(name: string) {
-            return cookieStore.get(name)?.value
+          getAll() {
+            return cookieStore.getAll()
           },
-          set(name: string, value: string, options: CookieOptions) {
-            cookieStore.set({ name, value, ...options })
-          },
-          remove(name: string, options: CookieOptions) {
-            cookieStore.set({ name, value: '', ...options })
+          setAll(cookiesToSet) {
+            cookiesToSet.forEach(({ name, value, options }) => {
+              authCookies.push({ name, value, options })
+              cookieStore.set(name, value, options)
+            })
           },
         },
       }
     )
+
+    const redirectWithAuthCookies = (path: string) => {
+      const response = NextResponse.redirect(new URL(path, siteOrigin))
+      authCookies.forEach(({ name, value, options }) => {
+        response.cookies.set(name, value, options)
+      })
+      return response
+    }
+
     const { error: exchangeError } = await supabase.auth.exchangeCodeForSession(code)
 
     if (exchangeError) {
       console.error('API auth callback exchange error:', exchangeError)
-      return NextResponse.redirect(new URL('/login?error=auth_failed', siteOrigin))
+      return redirectWithAuthCookies('/login?error=auth_failed')
     }
 
     const {
@@ -175,7 +190,11 @@ export async function GET(request: Request) {
     } = await supabase.auth.getUser()
 
     if (!user) {
-      return NextResponse.redirect(new URL('/login?error=no_user', siteOrigin))
+      return redirectWithAuthCookies('/login?error=no_user')
+    }
+
+    if (redirect === '/register/google') {
+      return redirectWithAuthCookies(redirect)
     }
 
     try {
@@ -189,8 +208,14 @@ export async function GET(request: Request) {
         error instanceof Error ? error.message : 'Unable to save profile'
       )
 
-      return NextResponse.redirect(errorUrl)
+      const response = NextResponse.redirect(errorUrl)
+      authCookies.forEach(({ name, value, options }) => {
+        response.cookies.set(name, value, options)
+      })
+      return response
     }
+
+    return redirectWithAuthCookies(redirect)
   }
 
   return NextResponse.redirect(new URL(redirect, siteOrigin))
