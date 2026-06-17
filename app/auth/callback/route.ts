@@ -69,7 +69,6 @@ function getProfilePayload(user: OAuthUser) {
     first_name: firstName || null,
     last_name: lastNameParts.join(' ') || null,
     avatar_url: user.user_metadata?.avatar_url || user.user_metadata?.picture || '',
-    provider: user.app_metadata?.provider || 'google',
     role: 'customer',
     is_active: true,
     is_verified: true,
@@ -223,7 +222,6 @@ export async function GET(request: Request) {
     .update({
       email: user.email,
       avatar_url: user.user_metadata?.avatar_url || undefined,
-      provider: user.app_metadata?.provider || 'email',
       is_verified: true,
       last_login: new Date().toISOString(),
       updated_at: new Date().toISOString(),

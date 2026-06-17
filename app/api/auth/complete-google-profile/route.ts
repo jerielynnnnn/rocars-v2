@@ -61,7 +61,6 @@ export async function POST(request: NextRequest) {
       first_name: firstName,
       last_name: lastName,
       avatar_url: avatarUrl,
-      provider: 'google',
       is_verified: true,
       updated_at: new Date().toISOString(),
     }

@@ -68,7 +68,6 @@ function getGoogleProfilePayload(user: OAuthUser) {
     first_name: firstName || null,
     last_name: lastNameParts.join(' ') || null,
     avatar_url: user.user_metadata?.avatar_url || user.user_metadata?.picture || '',
-    provider: user.app_metadata?.provider || 'google',
     role: 'customer',
     is_verified: true,
     is_active: true,
@@ -97,7 +96,6 @@ async function ensureGoogleProfile(user: OAuthUser) {
       .update({
         email: profilePayload.email,
         avatar_url: profilePayload.avatar_url,
-        provider: profilePayload.provider,
         is_verified: true,
         is_active: true,
         last_login: profilePayload.last_login,

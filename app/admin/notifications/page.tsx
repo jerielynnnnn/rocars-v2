@@ -6,6 +6,8 @@ import { supabase } from '@/lib/supabase'
 import {
   AlertTriangle,
   Bell,
+  ChevronLeft,
+  ChevronRight,
   CheckCircle,
   CreditCard,
   Eye,
@@ -43,6 +45,7 @@ interface PendingOrder {
 type FilterType = 'all' | 'unread' | AdminNotification['type']
 
 const ADMIN_DISMISSED_NOTIFS_KEY = 'rocars_dismissed_admin_notifications'
+const ITEMS_PER_PAGE = 10
 
 const notifyNavbar = () => {
   if (typeof window !== 'undefined') {
@@ -56,6 +59,7 @@ export default function AdminNotificationsPage() {
   const [selectedFilter, setSelectedFilter] = useState<FilterType>('all')
   const [searchQuery, setSearchQuery] = useState('')
   const [showFilters, setShowFilters] = useState(false)
+  const [currentPage, setCurrentPage] = useState(1)
 
   const getDismissedIds = () => {
     if (typeof window === 'undefined') return new Set<string>()
@@ -298,6 +302,15 @@ export default function AdminNotificationsPage() {
   const lowStockCount = notifications.filter(notification => notification.type === 'low_stock').length
   const orderCount = notifications.filter(notification => notification.type === 'new_order').length
   const refundCount = notifications.filter(notification => notification.type === 'pending_refund').length
+  const totalPages = Math.max(1, Math.ceil(filteredNotifications.length / ITEMS_PER_PAGE))
+  const paginatedNotifications = filteredNotifications.slice(
+    (currentPage - 1) * ITEMS_PER_PAGE,
+    currentPage * ITEMS_PER_PAGE
+  )
+  const pageStart = filteredNotifications.length === 0
+    ? 0
+    : (currentPage - 1) * ITEMS_PER_PAGE + 1
+  const pageEnd = Math.min(currentPage * ITEMS_PER_PAGE, filteredNotifications.length)
 
   const filterOptions: { value: FilterType; label: string; icon: typeof Bell }[] = [
     { value: 'all', label: 'All', icon: Bell },
@@ -380,7 +393,10 @@ export default function AdminNotificationsPage() {
             type="text"
             placeholder="Search notifications..."
             value={searchQuery}
-            onChange={(event) => setSearchQuery(event.target.value)}
+            onChange={(event) => {
+              setSearchQuery(event.target.value)
+              setCurrentPage(1)
+            }}
             className="w-full rounded-xl border border-gray-200 bg-white py-3 pl-11 pr-4 text-gray-700 placeholder-gray-400 transition focus:border-black focus:outline-none focus:ring-1 focus:ring-black"
           />
         </div>
@@ -394,7 +410,10 @@ export default function AdminNotificationsPage() {
               return (
                 <button
                   key={option.value}
-                  onClick={() => setSelectedFilter(option.value)}
+                  onClick={() => {
+                    setSelectedFilter(option.value)
+                    setCurrentPage(1)
+                  }}
                   className={`flex items-center gap-2 rounded-lg px-3 py-1.5 text-sm font-medium transition ${
                     isActive
                       ? 'bg-black text-white'
@@ -423,7 +442,7 @@ export default function AdminNotificationsPage() {
           </div>
         ) : (
           <div className="divide-y divide-gray-100">
-            {filteredNotifications.map(notification => (
+            {paginatedNotifications.map(notification => (
               <div
                 key={notification.id}
                 className={`p-5 transition ${notification.is_read ? 'hover:bg-gray-50' : 'bg-gray-50'}`}
@@ -485,10 +504,31 @@ export default function AdminNotificationsPage() {
         )}
 
         {filteredNotifications.length > 0 && (
-          <div className="border-t border-gray-100 bg-gray-50 px-5 py-3">
-            <p className="text-center text-xs text-gray-400">
-              Showing {filteredNotifications.length} of {notifications.length} notifications
+          <div className="flex flex-col gap-3 border-t border-gray-100 bg-gray-50 px-5 py-4 sm:flex-row sm:items-center sm:justify-between">
+            <p className="text-sm text-gray-500">
+              Showing {pageStart} to {pageEnd} of {filteredNotifications.length} notifications
             </p>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => setCurrentPage(prev => Math.max(1, prev - 1))}
+                disabled={currentPage === 1}
+                className="flex items-center gap-2 rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm font-medium transition hover:border-black disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                <ChevronLeft className="h-4 w-4" />
+                Prev
+              </button>
+              <span className="px-2 text-sm text-gray-500">
+                Page {currentPage} of {totalPages}
+              </span>
+              <button
+                onClick={() => setCurrentPage(prev => Math.min(totalPages, prev + 1))}
+                disabled={currentPage === totalPages}
+                className="flex items-center gap-2 rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm font-medium transition hover:border-black disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                Next
+                <ChevronRight className="h-4 w-4" />
+              </button>
+            </div>
           </div>
         )}
       </div>

@@ -38,6 +38,9 @@ export default function SignUpPage() {
     confirmPassword: '',
   })
 
+  const getErrorMessage = (err: unknown, fallback = 'Something went wrong') =>
+    err instanceof Error ? err.message : fallback
+
   // PASSWORD CHECKS
   const passwordChecks = {
     length: form.password.length >= 8,
@@ -117,7 +120,6 @@ export default function SignUpPage() {
             username: form.username,
             first_name: form.firstName,
             last_name: form.lastName,
-            provider: 'email',
           },
         },
       })
@@ -139,9 +141,9 @@ export default function SignUpPage() {
       setRegisteredEmail(form.email)
       setShowVerificationMessage(true)
       startResendTimer()
-    } catch (err: any) {
+    } catch (err) {
       console.error(err)
-      setError(err.message || 'Something went wrong')
+      setError(getErrorMessage(err))
     } finally {
       setLoading(false)
     }
@@ -164,8 +166,8 @@ export default function SignUpPage() {
       if (error) throw error
 
       startResendTimer()
-    } catch (err: any) {
-      setError(err.message)
+    } catch (err) {
+      setError(getErrorMessage(err, 'Failed to resend verification email'))
     } finally {
       setLoading(false)
     }

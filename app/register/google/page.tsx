@@ -48,11 +48,11 @@ export default function GoogleRegisterPage() {
 
       const { data: profile } = await supabase
         .from('profiles')
-        .select('username, first_name, last_name, avatar_url, provider')
+        .select('username, first_name, last_name, avatar_url')
         .eq('id', user.id)
         .maybeSingle()
 
-      if (profile?.username && profile.provider === 'google') {
+      if (profile?.username) {
         router.replace('/')
         return
       }

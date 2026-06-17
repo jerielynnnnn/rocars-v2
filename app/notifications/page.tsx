@@ -3,7 +3,18 @@
 import { useCallback, useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { supabase } from '@/lib/supabase'
-import { Bell, CheckCheck, Trash2, Eye, Package, Ticket, Star, CreditCard } from 'lucide-react'
+import {
+  Bell,
+  CheckCheck,
+  ChevronLeft,
+  ChevronRight,
+  CreditCard,
+  Eye,
+  Package,
+  Star,
+  Ticket,
+  Trash2,
+} from 'lucide-react'
 
 interface UserNotification {
   id: number
@@ -16,34 +27,58 @@ interface UserNotification {
   link?: string | null
 }
 
+const NOTIFICATIONS_PER_PAGE = 10
+
 export default function NotificationsPage() {
   const router = useRouter()
   const [notifications, setNotifications] = useState<UserNotification[]>([])
   const [loading, setLoading] = useState(true)
   const [userId, setUserId] = useState<string | null>(null)
+  const [currentPage, setCurrentPage] = useState(1)
+  const [totalNotifications, setTotalNotifications] = useState(0)
+  const [unreadCount, setUnreadCount] = useState(0)
 
   const fetchNotifications = useCallback(async (currentUserId?: string) => {
     const activeUserId = currentUserId || userId
     if (!activeUserId) return
 
     setLoading(true)
+
     try {
-      const { data, error } = await supabase
-        .from('notifications')
-        .select('*')
-        .eq('user_id', activeUserId)
-        .order('created_at', { ascending: false })
+      const from = (currentPage - 1) * NOTIFICATIONS_PER_PAGE
+      const to = from + NOTIFICATIONS_PER_PAGE - 1
+
+      const [{ data, error, count }, { count: unreadTotal, error: unreadError }] =
+        await Promise.all([
+          supabase
+            .from('notifications')
+            .select('*', { count: 'exact' })
+            .eq('user_id', activeUserId)
+            .order('created_at', { ascending: false })
+            .range(from, to),
+          supabase
+            .from('notifications')
+            .select('id', { count: 'exact', head: true })
+            .eq('user_id', activeUserId)
+            .eq('is_read', false),
+        ])
 
       if (error) {
         console.error('Error fetching notifications:', error)
         return
       }
 
+      if (unreadError) {
+        console.error('Error fetching unread notification count:', unreadError)
+      }
+
       setNotifications((data || []) as UserNotification[])
+      setTotalNotifications(count || 0)
+      setUnreadCount(unreadTotal || 0)
     } finally {
       setLoading(false)
     }
-  }, [userId])
+  }, [currentPage, userId])
 
   const markAsRead = async (id: number) => {
     const { error } = await supabase
@@ -53,11 +88,19 @@ export default function NotificationsPage() {
       .eq('user_id', userId)
 
     if (!error) {
+      const wasUnread = notifications.some(
+        notification => notification.id === id && !notification.is_read
+      )
+
       setNotifications(prev =>
         prev.map(notification =>
           notification.id === id ? { ...notification, is_read: true } : notification
         )
       )
+
+      if (wasUnread) {
+        setUnreadCount(prev => Math.max(0, prev - 1))
+      }
     }
   }
 
@@ -72,6 +115,7 @@ export default function NotificationsPage() {
 
     if (!error) {
       setNotifications(prev => prev.map(notification => ({ ...notification, is_read: true })))
+      setUnreadCount(0)
     }
   }
 
@@ -83,7 +127,21 @@ export default function NotificationsPage() {
       .eq('user_id', userId)
 
     if (!error) {
+      const nextTotal = Math.max(0, totalNotifications - 1)
+      const nextTotalPages = Math.max(1, Math.ceil(nextTotal / NOTIFICATIONS_PER_PAGE))
+
+      setTotalNotifications(nextTotal)
+
+      if (currentPage > nextTotalPages) {
+        setCurrentPage(nextTotalPages)
+        return
+      }
+
       setNotifications(prev => prev.filter(notification => notification.id !== id))
+
+      if (notifications.length === 1 && nextTotal > 0) {
+        void fetchNotifications()
+      }
     }
   }
 
@@ -101,8 +159,6 @@ export default function NotificationsPage() {
       router.push('/my-vouchers')
     } else if (notification.type === 'review_reply') {
       router.push('/reviews')
-    } else if (notification.type === 'payment_update') {
-      router.push('/orders')
     } else {
       router.push('/orders')
     }
@@ -168,7 +224,9 @@ export default function NotificationsPage() {
     }
   }, [fetchNotifications, userId])
 
-  const unreadCount = notifications.filter(notification => !notification.is_read).length
+  const totalPages = Math.max(1, Math.ceil(totalNotifications / NOTIFICATIONS_PER_PAGE))
+  const pageStart = totalNotifications === 0 ? 0 : (currentPage - 1) * NOTIFICATIONS_PER_PAGE + 1
+  const pageEnd = Math.min(currentPage * NOTIFICATIONS_PER_PAGE, totalNotifications)
 
   return (
     <main className="min-h-screen bg-[#f6f6f4] px-4 py-8 text-black sm:px-6 lg:px-8">
@@ -264,6 +322,35 @@ export default function NotificationsPage() {
                   </div>
                 </div>
               ))}
+            </div>
+          )}
+
+          {totalNotifications > 0 && (
+            <div className="flex flex-col gap-3 border-t border-gray-100 bg-gray-50 px-5 py-4 sm:flex-row sm:items-center sm:justify-between">
+              <p className="text-sm text-gray-500">
+                Showing {pageStart} to {pageEnd} of {totalNotifications} notifications
+              </p>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => setCurrentPage(prev => Math.max(1, prev - 1))}
+                  disabled={currentPage === 1}
+                  className="flex items-center gap-2 rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm font-medium transition hover:border-black disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  <ChevronLeft className="h-4 w-4" />
+                  Prev
+                </button>
+                <span className="px-2 text-sm text-gray-500">
+                  Page {currentPage} of {totalPages}
+                </span>
+                <button
+                  onClick={() => setCurrentPage(prev => Math.min(totalPages, prev + 1))}
+                  disabled={currentPage === totalPages}
+                  className="flex items-center gap-2 rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm font-medium transition hover:border-black disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  Next
+                  <ChevronRight className="h-4 w-4" />
+                </button>
+              </div>
             </div>
           )}
         </div>

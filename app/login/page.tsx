@@ -196,13 +196,17 @@ function LoginContent() {
   }
 
   const getProfileProvider = async (email: string): Promise<string | null> => {
-    const { data } = await supabase
+    const { error } = await supabase
       .from('profiles')
-      .select('provider')
+      .select('id')
       .eq('email', email)
       .maybeSingle()
 
-    return data?.provider || null
+    if (error) {
+      console.error('Profile lookup error:', error)
+    }
+
+    return null
   }
 
   const getAuthErrorMessage = (error: AuthError | Error) => {

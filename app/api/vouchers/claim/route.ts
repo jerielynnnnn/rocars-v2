@@ -77,7 +77,6 @@ async function ensureProfile(user: {
     first_name: user.user_metadata?.first_name || fallbackFirstName || null,
     last_name: user.user_metadata?.last_name || fallbackLastNameParts.join(' ') || null,
     avatar_url: user.user_metadata?.avatar_url || user.user_metadata?.picture || '',
-    provider: user.app_metadata?.provider || 'email',
     role: 'customer',
     is_active: true,
     is_verified: true,
